@@ -4,6 +4,9 @@ from torch import nn
 from tacsx.models.selector import TACSSelector, straight_through_select, topk_context_weights
 from tacsx.losses.policy import task_aligned_reward, standardize_advantage, reinforce_loss
 from tacsx.data.candidate_pool import FixedCandidatePool, PoolItem
+from tacsx.models.dinov3_adapter import TokenBatch
+from tacsx.models.dual_input_vit import DualInputViT
+from tacsx.models.tacs import TACSClassifier
 
 
 class DummyEncoder(nn.Module):
@@ -58,3 +61,44 @@ def test_candidate_pool_excludes_query():
     out = pool.sample_indices(query_index=3, n=5)
     assert 3 not in out
     assert len(out) == 5
+
+
+class DummyTokenAdapter(nn.Module):
+    embedding_dim = 8
+
+    def prepare_tokens(self, images):
+        b = images.shape[0]
+        patches = images.mean(dim=1).reshape(b, 4, 4).repeat(1, 1, 2)
+        return TokenBatch(torch.cat((torch.zeros(b, 1, 8), patches), dim=1), (2, 2))
+
+    def forward_blocks(self, tokens, grid_size):
+        assert tokens.shape[1] == 1 + grid_size[0] * grid_size[1]
+        return tokens
+
+
+def test_dual_input_accepts_none_and_context():
+    model = DualInputViT(DummyTokenAdapter(), num_classes=3)
+    q, c = torch.randn(2, 3, 4, 4), torch.randn(2, 3, 4, 4)
+    assert model(q).shape == (2, 3)
+    assert model(q, c).shape == (2, 3)
+
+
+class DummyTask(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = nn.Linear(3, 2)
+
+    def forward(self, query, context=None):
+        x = query.mean(dim=(-2, -1))
+        if context is not None:
+            x = x + context.mean(dim=(-2, -1))
+        return self.linear(x)
+
+
+def test_all_required_model_modes_smoke():
+    model = TACSClassifier(TACSSelector(DummyEncoder(), projection=False), DummyTask())
+    q, c, labels = torch.randn(3, 3, 8, 8), torch.randn(3, 4, 3, 8, 8), torch.tensor([0, 1, 0])
+    scores = model.selector(q, c)
+    for mode in ("no_context", "random_context", "dino_similarity", "gumbel_only", "policy_only", "full_tacs", "topk_tacs", "adaptive_topk_tacs"):
+        out = model.run_mode(mode, q, c, labels, None if mode == "no_context" else scores)
+        assert torch.isfinite(out.task_loss + out.policy_loss)

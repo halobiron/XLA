@@ -51,3 +51,11 @@ def topk_context_weights(scores: torch.Tensor, k: int):
         raise ValueError("k must satisfy 1 <= k <= number of candidates")
     values, indices = torch.topk(scores, k=k, dim=-1)
     return indices, F.softmax(values, dim=-1)
+
+
+def aggregate_topk_context(scores: torch.Tensor, candidates: torch.Tensor, k: int):
+    """Extension: convex pixel-space aggregate of the selector's Top-K images."""
+    indices, weights = topk_context_weights(scores, k)
+    batch = torch.arange(candidates.shape[0], device=candidates.device)[:, None]
+    selected = candidates[batch, indices]
+    return (selected * weights[..., None, None, None]).sum(dim=1), indices, weights

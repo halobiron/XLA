@@ -5,7 +5,7 @@ from torch import nn
 from torch.distributions import Categorical
 import torch.nn.functional as F
 
-from tacsx.models.selector import straight_through_select
+from tacsx.models.selector import aggregate_topk_context, straight_through_select
 from tacsx.losses.policy import task_aligned_reward, standardize_advantage, reinforce_loss
 
 
@@ -21,12 +21,14 @@ class TACSOutput:
 class TACSClassifier(nn.Module):
     """Orchestrates selector + downstream model."""
 
-    def __init__(self, selector, task_model, tau=0.1, lambda_policy=1.0):
+    def __init__(self, selector, task_model, tau=0.1, lambda_policy=1.0, topk_k=2, adaptive_threshold=0.9):
         super().__init__()
         self.selector = selector
         self.task_model = task_model
         self.tau = tau
         self.lambda_policy = lambda_policy
+        self.topk_k = topk_k
+        self.adaptive_threshold = adaptive_threshold
 
     def differentiable_path(self, query, candidates, labels):
         scores = self.selector(query, candidates)
@@ -45,8 +47,9 @@ class TACSClassifier(nn.Module):
             logits_base = self.task_model(query, None)
             loss_base = F.cross_entropy(logits_base, labels, reduction="none")
 
-        logits_ctx = self.task_model(query, chosen)
-        loss_ctx = F.cross_entropy(logits_ctx, labels, reduction="none")
+        with torch.no_grad():
+            logits_ctx = self.task_model(query, chosen)
+            loss_ctx = F.cross_entropy(logits_ctx, labels, reduction="none")
 
         reward = task_aligned_reward(loss_base, loss_ctx)
         advantage = standardize_advantage(reward)
@@ -63,3 +66,50 @@ class TACSClassifier(nn.Module):
             reward=reward,
             scores=scores,
         )
+
+    def run_mode(self, mode, query, candidates, labels, scores=None):
+        """One shared execution surface for every required experiment mode."""
+        if mode == "no_context":
+            logits = self.task_model(query, None)
+            loss = F.cross_entropy(logits, labels)
+            return TACSOutput(logits, loss, loss.new_zeros(()), None, loss.new_empty((query.shape[0], 0)))
+        if scores is None:
+            scores = self.selector(query, candidates)
+        if mode == "gumbel_only":
+            _, _, logits, losses = self.differentiable_path(query, candidates, labels)
+            return TACSOutput(logits, losses.mean(), losses.new_zeros(()), None, scores)
+        if mode == "policy_only":
+            dist = Categorical(logits=scores)
+            action = dist.sample()
+            chosen = candidates[torch.arange(query.shape[0], device=query.device), action]
+            logits = self.task_model(query, chosen)
+            task_loss = F.cross_entropy(logits, labels)
+            policy_loss, reward, _ = self.policy_terms(query, candidates, labels, scores)
+            return TACSOutput(logits, task_loss, policy_loss, reward, scores)
+        if mode == "full_tacs":
+            return self(query, candidates, labels)
+        if mode in {"random_context", "dino_similarity"}:
+            action = scores.argmax(dim=-1)
+            chosen = candidates[torch.arange(query.shape[0], device=query.device), action]
+            logits = self.task_model(query, chosen)
+            task_loss = F.cross_entropy(logits, labels)
+            return TACSOutput(logits, task_loss, task_loss.new_zeros(()), None, scores)
+        if mode == "topk_tacs":
+            chosen, _, _ = aggregate_topk_context(scores, candidates, k=min(self.topk_k, candidates.shape[1]))
+            logits = self.task_model(query, chosen)
+            task_loss = F.cross_entropy(logits, labels)
+            return TACSOutput(logits, task_loss, task_loss.new_zeros(()), None, scores)
+        if mode == "adaptive_topk_tacs":
+            # The batch uses max selected K; zeroed weights retain an individual adaptive K.
+            probs = scores.softmax(dim=-1)
+            sorted_p, order = probs.sort(dim=-1, descending=True)
+            keep = sorted_p.cumsum(-1) < self.adaptive_threshold
+            keep[:, 0] = True
+            weights = sorted_p * keep
+            weights = weights / weights.sum(-1, keepdim=True)
+            batch = torch.arange(candidates.shape[0], device=candidates.device)[:, None]
+            chosen = (candidates[batch, order] * weights[..., None, None, None]).sum(1)
+            logits = self.task_model(query, chosen)
+            task_loss = F.cross_entropy(logits, labels)
+            return TACSOutput(logits, task_loss, task_loss.new_zeros(()), None, scores)
+        raise ValueError(f"unknown mode: {mode}")

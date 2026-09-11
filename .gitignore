@@ -3,6 +3,8 @@ __pycache__/
 .venv/
 venv/
 data/
+!src/tacsx/data/
+!src/tacsx/data/*.py
 outputs/
 third_party/
 *.pt

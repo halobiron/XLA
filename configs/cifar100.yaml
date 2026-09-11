@@ -14,7 +14,7 @@ data:
 backbone:
   name: dinov3_vits16
   repo_dir: ./third_party/dinov3
-  weights: null
+  weights: ./checkpoints/dinov3_vits16_pretrain_lvd1689m-08c60483.pth
   freeze: true
   unfreeze_last_n_blocks: 0
 
@@ -26,6 +26,10 @@ policy:
   enabled: true
   lambda_policy: 1.0
   advantage_eps: 1.0e-6
+
+topk:
+  k: 2
+  adaptive_threshold: 0.90
 
 training:
   epochs: 30

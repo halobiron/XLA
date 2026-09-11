@@ -41,4 +41,28 @@ bash scripts/bootstrap.sh
 pytest -q
 ```
 
+## Run experiments
+
+Obtain DINOv3 ViT-S/16 weights through Meta's official access flow, set
+`backbone.weights` in `configs/cifar100.yaml`, then run one shared CLI for all
+baselines and ablations:
+
+```powershell
+python -m tacsx.cli --config configs/cifar100.yaml --mode no_context --name cifar100_e0
+python -m tacsx.cli --config configs/cifar100.yaml --mode dino_similarity --name cifar100_e2
+python -m tacsx.cli --config configs/cifar100.yaml --mode gumbel_only --name cifar100_e3
+python -m tacsx.cli --config configs/cifar100.yaml --mode policy_only --name cifar100_e4
+python -m tacsx.cli --config configs/cifar100.yaml --mode full_tacs --name cifar100_e5
+```
+
+`random_context`, `topk_tacs`, and `adaptive_topk_tacs` are supported by the
+same command. Outputs contain config, metrics, history, checkpoint, and
+selected-pair metadata. Use `--allow-random-backbone` only for a smoke test;
+it is explicitly marked as a fidelity deviation.
+
+For E6/E7, set `topk.k: 2` or `topk.k: 4` in the config before using
+`--mode topk_tacs`.
+
+After runs finish, aggregate them with `python -m tacsx.summarize --outputs outputs`.
+
 The source tree already defines reusable interfaces and tests. The Coding Agent should complete DINOv3 integration and the training/evaluation pipeline rather than replacing the project with a different framework.
