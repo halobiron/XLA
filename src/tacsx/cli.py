@@ -24,7 +24,7 @@ def _freeze(adapter, freeze: bool, last_n: int):
         for p in block.parameters(): p.requires_grad = True
 
 
-def build_model(cfg, allow_random_backbone: bool, include_context: bool = True):
+def build_model(cfg, allow_random_backbone: bool, include_selector: bool = True):
     back = cfg["backbone"]
     weights = back.get("weights")
     if not weights and not allow_random_backbone:
@@ -32,7 +32,7 @@ def build_model(cfg, allow_random_backbone: bool, include_context: bool = True):
     kwargs = {"weights": weights} if weights else {"pretrained": False}
     task_adapter = DINOv3Adapter(back["repo_dir"], **kwargs)
     _freeze(task_adapter, back.get("freeze", False), int(back.get("unfreeze_last_n_blocks", 0)))
-    if not include_context:
+    if not include_selector:
         task = DualInputViT(task_adapter, 100)
         return TACSClassifier(None, task, tau=float(cfg["selector"].get("tau", .1)), lambda_policy=float(cfg["policy"].get("lambda_policy", 1.0)))
 
@@ -50,20 +50,29 @@ def main(argv=None):
     p.add_argument("--mode", choices=sorted(REQUIRED_MODES))
     p.add_argument("--name")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument("--candidates-per-query", type=int, help="override sampled candidates per query; recorded as a practical deviation")
     p.add_argument("--allow-random-backbone", action="store_true", help="only for smoke tests; logs a fidelity deviation")
     args = p.parse_args(argv)
     cfg = yaml.safe_load(Path(args.config).read_text())
     if args.mode: cfg["experiment"]["mode"] = args.mode
     if args.name: cfg["experiment"]["name"] = args.name
+    if args.candidates_per_query is not None:
+        if args.candidates_per_query < 1:
+            p.error("--candidates-per-query must be at least 1")
+        original = cfg["data"]["candidates_per_query"]
+        cfg["data"]["candidates_per_query"] = args.candidates_per_query
+        cfg["experiment"].setdefault("deviations", []).append(
+            f"candidates_per_query overridden from {original} to {args.candidates_per_query}")
     mode = cfg["experiment"]["mode"]
     include_context = mode != "no_context"
+    include_selector = mode not in {"no_context", "random_context", "dino_similarity"}
     set_seed(int(cfg["experiment"]["seed"]))
     device = torch.device(args.device)
     train_loader, val_loader, test_loader, _ = make_cifar100_loaders(
         cfg["data"]["root"], cfg["data"]["image_size"], cfg["data"]["candidate_pool_ratio"],
         cfg["data"]["candidates_per_query"], cfg["training"]["batch_size"], cfg["data"]["num_workers"], cfg["experiment"]["seed"], include_context=include_context,
         validation_ratio=float(cfg["data"].get("validation_ratio", 0.1)))
-    model = build_model(cfg, args.allow_random_backbone, include_context=include_context).to(device)
+    model = build_model(cfg, args.allow_random_backbone, include_selector=include_selector).to(device)
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = optim.AdamW(params, lr=float(cfg["training"]["lr_head"]), weight_decay=float(cfg["training"]["weight_decay"]))
     use_amp = bool(cfg["training"].get("amp", False) and device.type == "cuda")
