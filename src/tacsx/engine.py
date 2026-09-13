@@ -30,14 +30,19 @@ def scores_for_mode(model, mode, query, candidates):
 
 
 def execute(model, mode, batch, device):
-    query, candidates, labels = (batch[k].to(device, non_blocking=True) for k in ("query", "candidates", "label"))
+    query = batch["query"].to(device, non_blocking=True)
+    labels = batch["label"].to(device, non_blocking=True)
+    candidates = None
+    if mode != "no_context":
+        candidates = batch["candidates"].to(device, non_blocking=True)
     scores = None if mode == "no_context" else scores_for_mode(model, mode, query, candidates)
     return model.run_mode(mode, query, candidates, labels, scores), query, candidates, labels
 
 
-def train_epoch(model, loader, optimizer, mode, device, lambda_policy, scaler=None):
+def train_epoch(model, loader, optimizer, mode, device, lambda_policy, scaler=None, show_progress=False):
     model.train(); total_loss = total_correct = total = 0
-    for batch in loader:
+    log_every = max(1, len(loader) // 10)
+    for step, batch in enumerate(loader, start=1):
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(device_type=device.type, enabled=scaler is not None):
             out, _, _, labels = execute(model, mode, batch, device)
@@ -49,6 +54,8 @@ def train_epoch(model, loader, optimizer, mode, device, lambda_policy, scaler=No
             loss.backward(); optimizer.step()
         total_loss += loss.detach().item() * labels.numel()
         total_correct += (out.logits.argmax(1) == labels).sum().item(); total += labels.numel()
+        if show_progress and (step == 1 or step % log_every == 0 or step == len(loader)):
+            print(f"  train batch {step}/{len(loader)}: loss={total_loss / total:.4f} acc={total_correct / total:.4f}", flush=True)
     return {"loss": total_loss / total, "accuracy": total_correct / total}
 
 

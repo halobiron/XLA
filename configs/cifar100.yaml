@@ -9,7 +9,7 @@ data:
   image_size: 224
   candidate_pool_ratio: 0.20
   candidates_per_query: 16
-  num_workers: 4
+  num_workers: 2
 
 backbone:
   name: dinov3_vits16
