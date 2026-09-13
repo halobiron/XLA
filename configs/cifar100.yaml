@@ -9,6 +9,7 @@ data:
   image_size: 224
   candidate_pool_ratio: 0.20
   candidates_per_query: 16
+  validation_ratio: 0.10
   num_workers: 2
 
 backbone:

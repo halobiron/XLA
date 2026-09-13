@@ -59,9 +59,10 @@ def main(argv=None):
     include_context = mode != "no_context"
     set_seed(int(cfg["experiment"]["seed"]))
     device = torch.device(args.device)
-    train_loader, val_loader, _ = make_cifar100_loaders(
+    train_loader, val_loader, test_loader, _ = make_cifar100_loaders(
         cfg["data"]["root"], cfg["data"]["image_size"], cfg["data"]["candidate_pool_ratio"],
-        cfg["data"]["candidates_per_query"], cfg["training"]["batch_size"], cfg["data"]["num_workers"], cfg["experiment"]["seed"], include_context=include_context)
+        cfg["data"]["candidates_per_query"], cfg["training"]["batch_size"], cfg["data"]["num_workers"], cfg["experiment"]["seed"], include_context=include_context,
+        validation_ratio=float(cfg["data"].get("validation_ratio", 0.1)))
     model = build_model(cfg, args.allow_random_backbone, include_context=include_context).to(device)
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = optim.AdamW(params, lr=float(cfg["training"]["lr_head"]), weight_decay=float(cfg["training"]["weight_decay"]))
@@ -78,7 +79,7 @@ def main(argv=None):
             best, best_state = val_metrics["accuracy"], {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
         print(f"epoch {epoch + 1}/{cfg['training']['epochs']}: train_acc={train_metrics['accuracy']:.4f} val_acc={val_metrics['accuracy']:.4f}", flush=True)
     model.load_state_dict(best_state)
-    metrics, pairs = evaluate(model, val_loader, mode, device, collect_pairs=True)
+    metrics, pairs = evaluate(model, test_loader, mode, device, collect_pairs=True)
     metrics.update({"method": mode, "seed": cfg["experiment"]["seed"], "best_val_acc": best, "test_acc": metrics["accuracy"], "random_backbone": args.allow_random_backbone})
     out = Path(cfg["output"]["root"]) / cfg["experiment"]["name"]
     save_run(out, cfg, history, metrics, model, pairs)
