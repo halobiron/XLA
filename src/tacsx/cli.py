@@ -51,6 +51,8 @@ def main(argv=None):
     p.add_argument("--name")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--candidates-per-query", type=int, help="override sampled candidates per query; recorded as a practical deviation")
+    p.add_argument("--epochs", type=int, help="override training epochs; recorded as a practical deviation")
+    p.add_argument("--batch-size", type=int, help="override batch size; recorded as a practical deviation")
     p.add_argument("--allow-random-backbone", action="store_true", help="only for smoke tests; logs a fidelity deviation")
     args = p.parse_args(argv)
     cfg = yaml.safe_load(Path(args.config).read_text())
@@ -63,6 +65,14 @@ def main(argv=None):
         cfg["data"]["candidates_per_query"] = args.candidates_per_query
         cfg["experiment"].setdefault("deviations", []).append(
             f"candidates_per_query overridden from {original} to {args.candidates_per_query}")
+    for key, value, flag in (("epochs", args.epochs, "--epochs"), ("batch_size", args.batch_size, "--batch-size")):
+        if value is not None:
+            if value < 1:
+                p.error(f"{flag} must be at least 1")
+            original = cfg["training"][key]
+            cfg["training"][key] = value
+            cfg["experiment"].setdefault("deviations", []).append(
+                f"{key} overridden from {original} to {value}")
     mode = cfg["experiment"]["mode"]
     include_context = mode != "no_context"
     include_selector = mode not in {"no_context", "random_context", "dino_similarity"}
