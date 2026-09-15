@@ -7,7 +7,7 @@ import torch
 from torch import optim
 
 from .data import make_cifar100_loaders
-from .engine import evaluate, save_run, set_seed, train_epoch
+from .engine import cache_dino_candidate_embeddings, evaluate, save_run, set_seed, train_epoch
 from .models.dinov3_adapter import DINOv3Adapter
 from .models.dual_input_vit import DualInputViT
 from .models.selector import TACSSelector
@@ -68,11 +68,18 @@ def main(argv=None):
     include_selector = mode not in {"no_context", "random_context", "dino_similarity"}
     set_seed(int(cfg["experiment"]["seed"]))
     device = torch.device(args.device)
+    cache_dino = mode == "dino_similarity"
     train_loader, val_loader, test_loader, _ = make_cifar100_loaders(
         cfg["data"]["root"], cfg["data"]["image_size"], cfg["data"]["candidate_pool_ratio"],
         cfg["data"]["candidates_per_query"], cfg["training"]["batch_size"], cfg["data"]["num_workers"], cfg["experiment"]["seed"], include_context=include_context,
-        validation_ratio=float(cfg["data"].get("validation_ratio", 0.1)))
+        validation_ratio=float(cfg["data"].get("validation_ratio", 0.1)), return_candidate_images=not cache_dino)
     model = build_model(cfg, args.allow_random_backbone, include_selector=include_selector).to(device)
+    dino_cache = None
+    if cache_dino:
+        if any(p.requires_grad for p in model.task_model.backbone.parameters()):
+            raise ValueError("DINO embedding cache requires a fully frozen task backbone")
+        print("Caching fixed-pool DINO embeddings once; subsequent epochs reuse them.", flush=True)
+        dino_cache = cache_dino_candidate_embeddings(model.task_model.backbone, train_loader.dataset, device)
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = optim.AdamW(params, lr=float(cfg["training"]["lr_head"]), weight_decay=float(cfg["training"]["weight_decay"]))
     use_amp = bool(cfg["training"].get("amp", False) and device.type == "cuda")
@@ -80,15 +87,15 @@ def main(argv=None):
     history, best, best_state = [], -1.0, None
     for epoch in range(int(cfg["training"]["epochs"])):
         train_loader.dataset.set_epoch(epoch)
-        train_metrics = train_epoch(model, train_loader, optimizer, mode, device, model.lambda_policy, scaler, show_progress=True)
-        val_metrics, _ = evaluate(model, val_loader, mode, device)
+        train_metrics = train_epoch(model, train_loader, optimizer, mode, device, model.lambda_policy, scaler, show_progress=True, dino_cache=dino_cache)
+        val_metrics, _ = evaluate(model, val_loader, mode, device, dino_cache=dino_cache)
         row = {"epoch": epoch + 1, **{f"train_{k}": v for k, v in train_metrics.items()}, **{f"val_{k}": v for k, v in val_metrics.items()}}
         history.append(row)
         if val_metrics["accuracy"] > best:
             best, best_state = val_metrics["accuracy"], {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
         print(f"epoch {epoch + 1}/{cfg['training']['epochs']}: train_acc={train_metrics['accuracy']:.4f} val_acc={val_metrics['accuracy']:.4f}", flush=True)
     model.load_state_dict(best_state)
-    metrics, pairs = evaluate(model, test_loader, mode, device, collect_pairs=True)
+    metrics, pairs = evaluate(model, test_loader, mode, device, collect_pairs=True, dino_cache=dino_cache)
     metrics.update({"method": mode, "seed": cfg["experiment"]["seed"], "best_val_acc": best, "test_acc": metrics["accuracy"], "random_backbone": args.allow_random_backbone})
     out = Path(cfg["output"]["root"]) / cfg["experiment"]["name"]
     save_run(out, cfg, history, metrics, model, pairs)

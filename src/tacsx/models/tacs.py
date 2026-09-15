@@ -16,6 +16,8 @@ class TACSOutput:
     policy_loss: torch.Tensor
     reward: torch.Tensor | None
     scores: torch.Tensor
+    action: torch.Tensor | None = None
+    context: torch.Tensor | None = None
 
 
 class TACSClassifier(nn.Module):
@@ -67,7 +69,7 @@ class TACSClassifier(nn.Module):
             scores=scores,
         )
 
-    def run_mode(self, mode, query, candidates, labels, scores=None):
+    def run_mode(self, mode, query, candidates, labels, scores=None, selected_context=None, selected_action=None):
         """One shared execution surface for every required experiment mode."""
         if mode == "no_context":
             logits = self.task_model(query, None)
@@ -89,11 +91,11 @@ class TACSClassifier(nn.Module):
         if mode == "full_tacs":
             return self(query, candidates, labels)
         if mode in {"random_context", "dino_similarity"}:
-            action = scores.argmax(dim=-1)
-            chosen = candidates[torch.arange(query.shape[0], device=query.device), action]
+            action = scores.argmax(dim=-1) if selected_action is None else selected_action
+            chosen = selected_context if selected_context is not None else candidates[torch.arange(query.shape[0], device=query.device), action]
             logits = self.task_model(query, chosen)
             task_loss = F.cross_entropy(logits, labels)
-            return TACSOutput(logits, task_loss, task_loss.new_zeros(()), None, scores)
+            return TACSOutput(logits, task_loss, task_loss.new_zeros(()), None, scores, action, chosen)
         if mode == "topk_tacs":
             chosen, _, _ = aggregate_topk_context(scores, candidates, k=min(self.topk_k, candidates.shape[1]))
             logits = self.task_model(query, chosen)
