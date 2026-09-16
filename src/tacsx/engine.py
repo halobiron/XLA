@@ -104,7 +104,7 @@ def evaluate(model, loader, mode, device, collect_pairs=False, dino_cache=None):
             entropies.extend((-(probs * probs.clamp_min(1e-12).log()).sum(-1)).cpu().tolist())
             if collect_pairs:
                 b = torch.arange(labels.shape[0], device=device)
-                ctx = candidates if out.context is not None else candidates[b, chosen]
+                ctx = out.context if out.context is not None else candidates[b, chosen]
                 cos = F.cosine_similarity(query.flatten(1), ctx.flatten(1)).cpu().tolist()
                 chosen_cpu = chosen.detach().cpu()
                 for i in range(labels.shape[0]):
