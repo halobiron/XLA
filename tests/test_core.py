@@ -102,3 +102,14 @@ def test_all_required_model_modes_smoke():
     for mode in ("no_context", "random_context", "dino_similarity", "gumbel_only", "policy_only", "full_tacs", "topk_tacs", "adaptive_topk_tacs"):
         out = model.run_mode(mode, q, c, labels, None if mode == "no_context" else scores)
         assert torch.isfinite(out.task_loss + out.policy_loss)
+
+
+def test_policy_only_records_the_sampled_action_and_context():
+    model = TACSClassifier(TACSSelector(DummyEncoder(), projection=False), DummyTask())
+    q, c = torch.randn(3, 3, 8, 8), torch.randn(3, 4, 3, 8, 8)
+    labels = torch.tensor([0, 1, 0])
+    out = model.run_mode("policy_only", q, c, labels)
+    batch = torch.arange(q.shape[0])
+    assert out.action is not None
+    assert out.context is not None
+    assert torch.allclose(out.context, c[batch, out.action])

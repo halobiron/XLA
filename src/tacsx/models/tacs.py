@@ -39,9 +39,10 @@ class TACSClassifier(nn.Module):
         loss = F.cross_entropy(logits, labels, reduction="none")
         return scores, mask, logits, loss
 
-    def policy_terms(self, query, candidates, labels, scores):
+    def policy_terms(self, query, candidates, labels, scores, action=None):
         dist = Categorical(logits=scores)
-        action = dist.sample()
+        if action is None:
+            action = dist.sample()
         b = query.shape[0]
         chosen = candidates[torch.arange(b, device=query.device), action]
 
@@ -59,7 +60,8 @@ class TACSClassifier(nn.Module):
         return p_loss, reward, action
 
     def forward(self, query, candidates, labels):
-        scores, _, logits, item_loss = self.differentiable_path(query, candidates, labels)
+        scores, mask, logits, item_loss = self.differentiable_path(query, candidates, labels)
+        context = (mask[..., None, None, None] * candidates).sum(dim=1)
         p_loss, reward, _ = self.policy_terms(query, candidates, labels, scores)
         return TACSOutput(
             logits=logits,
@@ -67,6 +69,8 @@ class TACSClassifier(nn.Module):
             policy_loss=p_loss,
             reward=reward,
             scores=scores,
+            action=mask.argmax(dim=-1),
+            context=context,
         )
 
     def run_mode(self, mode, query, candidates, labels, scores=None, selected_context=None, selected_action=None):
@@ -78,16 +82,20 @@ class TACSClassifier(nn.Module):
         if scores is None:
             scores = self.selector(query, candidates)
         if mode == "gumbel_only":
-            _, _, logits, losses = self.differentiable_path(query, candidates, labels)
-            return TACSOutput(logits, losses.mean(), losses.new_zeros(()), None, scores)
+            selected_scores, mask, logits, losses = self.differentiable_path(query, candidates, labels)
+            context = (mask[..., None, None, None] * candidates).sum(dim=1)
+            return TACSOutput(
+                logits, losses.mean(), losses.new_zeros(()), None, selected_scores,
+                action=mask.argmax(dim=-1), context=context,
+            )
         if mode == "policy_only":
             dist = Categorical(logits=scores)
             action = dist.sample()
             chosen = candidates[torch.arange(query.shape[0], device=query.device), action]
             logits = self.task_model(query, chosen)
             task_loss = F.cross_entropy(logits, labels)
-            policy_loss, reward, _ = self.policy_terms(query, candidates, labels, scores)
-            return TACSOutput(logits, task_loss, policy_loss, reward, scores)
+            policy_loss, reward, _ = self.policy_terms(query, candidates, labels, scores, action=action)
+            return TACSOutput(logits, task_loss, policy_loss, reward, scores, action, chosen)
         if mode == "full_tacs":
             return self(query, candidates, labels)
         if mode in {"random_context", "dino_similarity"}:
