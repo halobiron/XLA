@@ -108,13 +108,44 @@ def evaluate(model, loader, mode, device, collect_pairs=False, dino_cache=None):
                 cos = F.cosine_similarity(query.flatten(1), ctx.flatten(1)).cpu().tolist()
                 chosen_cpu = chosen.detach().cpu()
                 for i in range(labels.shape[0]):
-                    pairs.append({"query_id": int(batch["query_id"][i]), "query_label": int(labels[i]), "candidate_id": int(batch["candidate_ids"][i, chosen_cpu[i]]), "candidate_label": int(batch["candidate_labels"][i, chosen_cpu[i]]), "similarity": cos[i], "selection_score": float(out.scores[i, chosen[i]]), "reward": float(out.reward[i]) if out.reward is not None else ""})
+                    pair = {"query_id": int(batch["query_id"][i]), "query_label": int(labels[i]),
+                            "candidate_id": int(batch["candidate_ids"][i, chosen_cpu[i]]),
+                            "candidate_label": int(batch["candidate_labels"][i, chosen_cpu[i]]),
+                            "similarity": cos[i], "selection_score": float(out.scores[i, chosen[i]]),
+                            "reward": float(out.reward[i]) if out.reward is not None else ""}
+                    if out.topk_indices is not None and out.topk_weights is not None:
+                        indices = out.topk_indices[i].detach().cpu()
+                        weights = out.topk_weights[i].detach().cpu()
+                        active = weights > 0
+                        indices, weights = indices[active], weights[active]
+                        candidate_ids = batch["candidate_ids"][i, indices].tolist()
+                        candidate_labels = batch["candidate_labels"][i, indices].tolist()
+                        # Legacy candidate_* fields deliberately retain top-1 for
+                        # backwards-compatible CSV consumers. Top-K fields are
+                        # the authoritative description of the aggregate context.
+                        pair.update({
+                            "candidate_id": int(candidate_ids[0]),
+                            "candidate_label": int(candidate_labels[0]),
+                            "selection_score": float(out.scores[i, indices[0].to(device)]),
+                            "topk_candidate_ids": json.dumps([int(value) for value in candidate_ids]),
+                            "topk_candidate_labels": json.dumps([int(value) for value in candidate_labels]),
+                            "topk_weights": json.dumps([float(value) for value in weights.tolist()]),
+                            "effective_k": int(indices.numel()),
+                            "cross_class_weight": float(sum(float(weight) for label, weight in zip(candidate_labels, weights.tolist()) if label != int(labels[i]))),
+                        })
+                    else:
+                        pair["topk_candidate_ids"] = ""
+                        pair["topk_candidate_labels"] = ""
+                        pair["topk_weights"] = ""
+                        pair["effective_k"] = 1
+                        pair["cross_class_weight"] = float(pair["candidate_label"] != int(labels[i]))
+                    pairs.append(pair)
         if out.reward is not None: rewards.extend(out.reward.cpu().tolist())
     result = {"avg_loss": total_loss / total, "accuracy": total_correct / total,
               "mean_selection_entropy": float(np.mean(entropies)) if entropies else None,
               "mean_reward": float(np.mean(rewards)) if rewards else None}
     if pairs:
-        result["cross_class_rate"] = float(np.mean([x["query_label"] != x["candidate_label"] for x in pairs]))
+        result["cross_class_rate"] = float(np.mean([x["cross_class_weight"] for x in pairs]))
         result["mean_query_context_cosine"] = float(np.mean([x["similarity"] for x in pairs]))
     return result, pairs
 

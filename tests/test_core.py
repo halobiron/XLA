@@ -1,6 +1,8 @@
 import torch
 from torch import nn
+import json
 
+from tacsx.engine import evaluate
 from tacsx.models.selector import TACSSelector, straight_through_select, topk_context_weights
 from tacsx.losses.policy import task_aligned_reward, standardize_advantage, reinforce_loss
 from tacsx.data.candidate_pool import FixedCandidatePool, PoolItem
@@ -102,6 +104,40 @@ def test_all_required_model_modes_smoke():
     for mode in ("no_context", "random_context", "dino_similarity", "gumbel_only", "policy_only", "full_tacs", "topk_tacs", "adaptive_topk_tacs"):
         out = model.run_mode(mode, q, c, labels, None if mode == "no_context" else scores)
         assert torch.isfinite(out.task_loss + out.policy_loss)
+
+
+def test_topk_modes_expose_complete_context_metadata():
+    model = TACSClassifier(TACSSelector(DummyEncoder(), projection=False), DummyTask(), topk_k=2)
+    q, c, labels = torch.randn(3, 3, 8, 8), torch.randn(3, 4, 3, 8, 8), torch.tensor([0, 1, 0])
+    scores = model.selector(q, c)
+    for mode in ("topk_tacs", "adaptive_topk_tacs"):
+        out = model.run_mode(mode, q, c, labels, scores)
+        assert out.context is not None
+        assert out.topk_indices is not None
+        assert out.topk_weights is not None
+        assert torch.allclose(out.topk_weights.sum(dim=-1), torch.ones(q.shape[0]), atol=1e-6)
+        assert torch.all(out.topk_weights >= 0)
+
+
+def test_evaluator_records_all_topk_candidates_and_weights():
+    model = TACSClassifier(TACSSelector(DummyEncoder(), projection=False), DummyTask(), topk_k=2)
+    batch = {
+        "query": torch.randn(2, 3, 8, 8), "label": torch.tensor([0, 1]),
+        "query_id": torch.tensor([50000, 50001]),
+        "candidates": torch.randn(2, 4, 3, 8, 8),
+        "candidate_ids": torch.tensor([[10, 11, 12, 13], [20, 21, 22, 23]]),
+        "candidate_labels": torch.tensor([[1, 2, 3, 4], [0, 2, 3, 4]]),
+    }
+    class OneBatchLoader(list):
+        dataset = None
+    _, pairs = evaluate(model, OneBatchLoader([batch]), "topk_tacs", torch.device("cpu"), collect_pairs=True)
+    assert len(pairs) == 2
+    for pair in pairs:
+        ids, labels, weights = (json.loads(pair[key]) for key in
+                                ("topk_candidate_ids", "topk_candidate_labels", "topk_weights"))
+        assert pair["effective_k"] == 2
+        assert len(ids) == len(labels) == len(weights) == 2
+        assert abs(sum(weights) - 1.0) < 1e-6
 
 
 def test_policy_only_records_the_sampled_action_and_context():

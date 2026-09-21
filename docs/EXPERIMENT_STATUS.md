@@ -83,32 +83,48 @@ cho action thực tế nếu chúng được tạo trước bản sửa này.
 - [ ] Artifact thô của các baseline cũ (No-Context, Random context và DINO
   similarity) không có trong repository; chỉ còn các số liệu đã ghi ở bảng
   trên. Không cần chạy lại chúng vì action-fix không ảnh hưởng các baseline.
-- [ ] Chưa có retrieval examples dạng ảnh. Có thể render sau từ checkpoint và
-  `selected_pairs.csv` đã lưu; đây không phải điều kiện để giữ lại ba run
-  action-fix.
+- [x] Đã render 16 retrieval examples cho mỗi run action-fix. Ảnh và CSV mô tả
+  các cặp được chọn nằm tại `outputs/<run_name>/retrieval_examples/` và
+  `outputs/<run_name>/retrieval_examples.csv`. Các cặp được chọn có chủ đích
+  gồm cả kết quả tốt/xấu theo reward (policy/full TACS), hoặc score cao/thấp
+  (Gumbel), thay vì chỉ lấy một đoạn đầu của test set.
 
-## Chạy lại sau bản sửa action — hoàn tất
+## Việc cần làm tiếp theo — extension Top-K TACS-X
 
-Ba chế độ learned-selector bắt buộc đã được chạy lại với tên mới; No-Context,
-Random context và DINO similarity không bị ảnh hưởng:
+Không chạy lại các baseline hoặc ba run `*_actionfix`: chúng đã có kết quả hợp
+lệ trong ma trận ngân sách 5 epoch/C=4. Phần còn lại của dự án là đánh giá
+extension Top-K TACS-X trên cùng ngân sách đó.
 
-```bash
-python -m tacsx.cli --config configs/cifar100.yaml --mode gumbel_only --name cifar100_gumbel_c4_e5_actionfix --candidates-per-query 4 --epochs 5 --batch-size 32
-python -m tacsx.cli --config configs/cifar100.yaml --mode policy_only --name cifar100_policy_c4_e5_actionfix --candidates-per-query 4 --epochs 5 --batch-size 32
-python -m tacsx.cli --config configs/cifar100.yaml --mode full_tacs --name cifar100_full_tacs_c4_e5_actionfix --candidates-per-query 4 --epochs 5 --batch-size 32
-```
+1. [x] **Đã sửa metadata và renderer cho Top-K.** `selected_pairs.csv` giờ
+   lưu `topk_candidate_ids`, `topk_candidate_labels`, `topk_weights` và
+   `effective_k`; các trường `candidate_id`/`candidate_label` cũ được giữ là
+   top-1 để tương thích ngược. Renderer hiển thị query cùng mọi context đã đóng
+   góp, kèm weight. Test suite xác minh weight tổng bằng 1 và evaluator lưu đủ
+   danh sách Top-K.
+2. **Chạy Top-K cố định với `K=2`**, giữ seed 42, C=4, 5 epoch và batch size
+   32. Config mặc định đã đặt `topk.k: 2`:
 
-Mỗi thư mục `outputs/<run_name>/` đã được kiểm tra có đủ:
+   ```powershell
+   .venv\Scripts\python.exe -m tacsx.cli --config configs/cifar100.yaml --mode topk_tacs --name cifar100_topk_k2_c4_e5 --candidates-per-query 4 --epochs 5 --batch-size 32
+   ```
 
-- `config.yaml`
-- `metrics.json`
-- `history.csv`
-- `checkpoint_best.pt`
-- `selected_pairs.csv`
+3. **Chạy adaptive Top-K** với `adaptive_threshold: 0.90` từ config, dùng đúng
+   ngân sách trên:
 
-`selected_pairs.csv` là metadata truy hồi được CLI lưu tự động. Các artifact và
-file tổng hợp đã có trong `outputs/`, đồng thời được sao lưu trong `outputs.zip`.
-Vì vậy phiên Colab dùng để tạo ba run action-fix có thể được xóa.
+   ```powershell
+   .venv\Scripts\python.exe -m tacsx.cli --config configs/cifar100.yaml --mode adaptive_topk_tacs --name cifar100_adaptive_topk_c4_e5 --candidates-per-query 4 --epochs 5 --batch-size 32
+   ```
+
+4. **Tổng hợp và phân tích extension** sau khi hai run hoàn tất:
+
+   ```powershell
+   .venv\Scripts\python.exe -m tacsx.summarize --outputs outputs
+   .venv\Scripts\python.exe scripts\render_retrieval_examples.py --outputs outputs --data-root data --limit 16
+   ```
+
+   So sánh `topk_tacs` và `adaptive_topk_tacs` với `full_tacs` dưới cùng ngân
+   sách. Báo cáo rõ nếu Top-K không cải thiện accuracy; đó vẫn là kết quả hợp
+   lệ của extension, không phải lý do để chỉnh theo test accuracy.
 
 Khi báo cáo, sử dụng ba hàng `*_actionfix` ở bảng trên cho các chế độ học được;
 không dùng các số learned-selector từ trước bản sửa action.

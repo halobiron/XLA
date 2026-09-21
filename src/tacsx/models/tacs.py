@@ -18,6 +18,8 @@ class TACSOutput:
     scores: torch.Tensor
     action: torch.Tensor | None = None
     context: torch.Tensor | None = None
+    topk_indices: torch.Tensor | None = None
+    topk_weights: torch.Tensor | None = None
 
 
 class TACSClassifier(nn.Module):
@@ -105,10 +107,11 @@ class TACSClassifier(nn.Module):
             task_loss = F.cross_entropy(logits, labels)
             return TACSOutput(logits, task_loss, task_loss.new_zeros(()), None, scores, action, chosen)
         if mode == "topk_tacs":
-            chosen, _, _ = aggregate_topk_context(scores, candidates, k=min(self.topk_k, candidates.shape[1]))
+            chosen, indices, weights = aggregate_topk_context(scores, candidates, k=min(self.topk_k, candidates.shape[1]))
             logits = self.task_model(query, chosen)
             task_loss = F.cross_entropy(logits, labels)
-            return TACSOutput(logits, task_loss, task_loss.new_zeros(()), None, scores)
+            return TACSOutput(logits, task_loss, task_loss.new_zeros(()), None, scores,
+                              context=chosen, topk_indices=indices, topk_weights=weights)
         if mode == "adaptive_topk_tacs":
             # The batch uses max selected K; zeroed weights retain an individual adaptive K.
             probs = scores.softmax(dim=-1)
@@ -121,5 +124,6 @@ class TACSClassifier(nn.Module):
             chosen = (candidates[batch, order] * weights[..., None, None, None]).sum(1)
             logits = self.task_model(query, chosen)
             task_loss = F.cross_entropy(logits, labels)
-            return TACSOutput(logits, task_loss, task_loss.new_zeros(()), None, scores)
+            return TACSOutput(logits, task_loss, task_loss.new_zeros(()), None, scores,
+                              context=chosen, topk_indices=order, topk_weights=weights)
         raise ValueError(f"unknown mode: {mode}")
