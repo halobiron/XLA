@@ -10,6 +10,7 @@ src/tacsx.egg-info/PKG-INFO
 src/tacsx.egg-info/SOURCES.txt
 src/tacsx.egg-info/dependency_links.txt
 src/tacsx.egg-info/entry_points.txt
+src/tacsx.egg-info/requires.txt
 src/tacsx.egg-info/top_level.txt
 src/tacsx/data/__init__.py
 src/tacsx/data/candidate_pool.py
