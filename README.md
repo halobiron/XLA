@@ -41,6 +41,25 @@ bash scripts/bootstrap.sh
 pytest -q
 ```
 
+## Kaggle: use mounted data, do not download it at runtime
+
+The `169M` progress bar is the CIFAR-100 archive. It is deliberately excluded
+from Git because it exceeds GitHub's normal single-file limit. Upload the
+existing `data/cifar-100-python/` directory as a private Kaggle Dataset, attach
+it to the notebook, and set its mount directory with `--data-root`. The default
+configuration now refuses a runtime download.
+
+```powershell
+python -m tacsx.cli --config configs/cifar100.yaml --data-root /kaggle/input/<your-cifar100-dataset> --mode full_tacs --name cifar100_kaggle
+```
+
+The directory supplied to `--data-root` must directly contain
+`cifar-100-python/`. Commit the source files, configuration, and the local
+DINOv3 checkpoint already tracked in `checkpoints/`; do not commit `data/`,
+`src/tacsx.egg-info/`, or generated outputs. Attach the official DINOv3 source
+and weights as Kaggle Datasets too if they are not already present in the
+repository checkout.
+
 ## Run experiments
 
 Obtain DINOv3 ViT-S/16 weights through Meta's official access flow, set

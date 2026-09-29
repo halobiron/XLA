@@ -53,11 +53,19 @@ def main(argv=None):
     p.add_argument("--candidates-per-query", type=int, help="override sampled candidates per query; recorded as a practical deviation")
     p.add_argument("--epochs", type=int, help="override training epochs; recorded as a practical deviation")
     p.add_argument("--batch-size", type=int, help="override batch size; recorded as a practical deviation")
+    p.add_argument("--data-root", help="directory containing cifar-100-python; useful for a mounted Kaggle Dataset")
+    p.add_argument("--download-data", action="store_true", help="explicitly download CIFAR-100 when it is not mounted locally")
     p.add_argument("--allow-random-backbone", action="store_true", help="only for smoke tests; logs a fidelity deviation")
     args = p.parse_args(argv)
     cfg = yaml.safe_load(Path(args.config).read_text())
     if args.mode: cfg["experiment"]["mode"] = args.mode
     if args.name: cfg["experiment"]["name"] = args.name
+    if args.data_root:
+        cfg["data"]["root"] = args.data_root
+    if args.download_data:
+        cfg["data"]["download"] = True
+        cfg["experiment"].setdefault("deviations", []).append(
+            "CIFAR-100 downloaded at runtime instead of using a mounted local dataset")
     if args.candidates_per_query is not None:
         if args.candidates_per_query < 1:
             p.error("--candidates-per-query must be at least 1")
@@ -82,7 +90,8 @@ def main(argv=None):
     train_loader, val_loader, test_loader, _ = make_cifar100_loaders(
         cfg["data"]["root"], cfg["data"]["image_size"], cfg["data"]["candidate_pool_ratio"],
         cfg["data"]["candidates_per_query"], cfg["training"]["batch_size"], cfg["data"]["num_workers"], cfg["experiment"]["seed"], include_context=include_context,
-        validation_ratio=float(cfg["data"].get("validation_ratio", 0.1)), return_candidate_images=not cache_dino)
+        validation_ratio=float(cfg["data"].get("validation_ratio", 0.1)), return_candidate_images=not cache_dino,
+        download=bool(cfg["data"].get("download", False)))
     model = build_model(cfg, args.allow_random_backbone, include_selector=include_selector).to(device)
     dino_cache = None
     if cache_dino:

@@ -51,11 +51,12 @@ class CIFAR100ContextDataset(Dataset):
 
 def make_cifar100_loaders(root: str, image_size: int, pool_ratio: float, candidates_per_query: int,
                            batch_size: int, num_workers: int, seed: int, include_context: bool = True,
-                           validation_ratio: float = 0.1, return_candidate_images: bool = True):
+                           validation_ratio: float = 0.1, return_candidate_images: bool = True,
+                           download: bool = False):
     root = str(Path(root))
-    train_aug = datasets.CIFAR100(root, train=True, download=True, transform=_transform(image_size, True))
-    train_eval = datasets.CIFAR100(root, train=True, download=True, transform=_transform(image_size, False))
-    test = datasets.CIFAR100(root, train=False, download=True, transform=_transform(image_size, False))
+    train_aug = datasets.CIFAR100(root, train=True, download=download, transform=_transform(image_size, True))
+    train_eval = datasets.CIFAR100(root, train=True, download=download, transform=_transform(image_size, False))
+    test = datasets.CIFAR100(root, train=False, download=download, transform=_transform(image_size, False))
     ids = list(range(len(train_eval)))
     random.Random(seed).shuffle(ids)
     val_count = max(1, int(len(ids) * validation_ratio))

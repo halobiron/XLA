@@ -6,6 +6,8 @@ experiment:
 data:
   dataset: cifar100
   root: ./data
+  # Set to false on Kaggle and point --data-root at an attached CIFAR-100 Dataset.
+  download: false
   image_size: 224
   candidate_pool_ratio: 0.20
   candidates_per_query: 16

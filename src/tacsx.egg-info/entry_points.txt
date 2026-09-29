@@ -1,3 +1,0 @@
-[console_scripts]
-tacsx-summary = tacsx.summarize:main
-tacsx-train = tacsx.cli:main
