@@ -27,8 +27,8 @@
 
 ## Before finalizing
 - [x] All tests pass.
-- [ ] Smoke train every required mode.
+- [x] Smoke train every required mode.
 - [x] Update implementation decisions.
 - [x] Add exact commands to README.
-- [ ] Generate result summary from real runs (requires official DINOv3 weights).
+- [x] Generate result summary from real runs (requires official DINOv3 weights).
 - [ ] Never fabricate paper-matching numbers.
