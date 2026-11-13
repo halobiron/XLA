@@ -2,6 +2,14 @@ experiment:
   name: cifar100_full_tacs
   seed: 42
   mode: full_tacs
+  deviations:
+  - 30 epochs instead of paper 100
+  - 224x224 images instead of paper 256x256
+  - batch size 16 instead of paper classification batch size 64
+  - fully frozen encoders instead of paper full classification fine-tuning
+  - 16 sampled candidates per query for limited compute
+  - horizontal pair RoPE layout is a project choice not specified by the paper
+  - padded random crop and horizontal flip instead of paper random resized crop and horizontal/vertical flips
 
 data:
   dataset: cifar100
@@ -20,6 +28,7 @@ backbone:
   weights: ./checkpoints/dinov3_vits16_pretrain_lvd1689m-08c60483.pth
   freeze: true
   unfreeze_last_n_blocks: 0
+  pair_rope_layout: horizontal
 
 selector:
   projection: true
@@ -46,6 +55,7 @@ training:
   amp: true
 
 evaluation:
+  selection: argmax
   save_selected_pairs: true
   attention_visualization: false
 

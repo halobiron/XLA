@@ -1,15 +1,18 @@
 # Partial fine-tuning: last 4 DINOv3 blocks (+ final norm) train at lr_backbone.
-# Requires trainer_version 2 (per-group LR + cosine). Compare ONLY with runs from this
+# Requires trainer_version 3 (per-group LR, corrected positions and argmax). Compare ONLY with runs from this
 # same config, including a no_context run: the old frozen 82.79% is not the right baseline here.
 experiment:
   name: cifar100_unf4
   seed: 42
   mode: full_tacs
   deviations:
-  - candidates_per_query 4 instead of 16
-  - 5 epochs instead of 30
-  - batch size 32 instead of 16
-  - last 4 backbone blocks unfrozen (lr_backbone 1e-5), rest frozen
+  - 4 sampled candidates per query for limited compute
+  - 5 epochs instead of paper 100
+  - batch size 32 instead of paper classification batch size 64
+  - 224x224 images instead of paper 256x256
+  - last 4 blocks and final norm train at lr_backbone 1e-5 instead of full classification fine-tuning
+  - horizontal pair RoPE layout is a project choice not specified by the paper
+  - padded random crop and horizontal flip instead of paper random resized crop and horizontal/vertical flips
 
 data:
   dataset: cifar100
@@ -27,6 +30,7 @@ backbone:
   weights: ./checkpoints/dinov3_vits16_pretrain_lvd1689m-08c60483.pth
   freeze: true
   unfreeze_last_n_blocks: 4
+  pair_rope_layout: horizontal
 
 selector:
   projection: true
@@ -53,6 +57,7 @@ training:
   amp: true
 
 evaluation:
+  selection: argmax
   save_selected_pairs: true
   attention_visualization: false
 

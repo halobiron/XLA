@@ -30,5 +30,4 @@ class DualInputViT(nn.Module):
         prefix_len = q.tokens.shape[1] - q.grid_size[0] * q.grid_size[1]
         # Preserve the query CLS/storage tokens once, concatenate only patches.
         tokens = torch.cat((q.tokens[:, :prefix_len], q.tokens[:, prefix_len:], c.tokens[:, prefix_len:]), dim=1)
-        grid = (q.grid_size[0], q.grid_size[1] * 2)
-        return self.head(self.backbone.forward_blocks(tokens, grid)[:, 0])
+        return self.head(self.backbone.forward_blocks(tokens, q.grid_size, num_images=2)[:, 0])

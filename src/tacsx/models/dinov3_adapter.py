@@ -17,8 +17,12 @@ class TokenBatch:
 class DINOv3Adapter(nn.Module):
     """Thin compatibility layer around official DINOv3 ViT-S/16."""
 
-    def __init__(self, repo_dir: str, weights: str | None = None, pretrained: bool | None = None):
+    def __init__(self, repo_dir: str, weights: str | None = None, pretrained: bool | None = None,
+                 pair_rope_layout: str = "legacy"):
         super().__init__()
+        if pair_rope_layout not in {"legacy", "horizontal", "per_image"}:
+            raise ValueError("pair_rope_layout must be legacy, horizontal or per_image")
+        self.pair_rope_layout = pair_rope_layout
         repo = Path(repo_dir)
         if not repo.exists():
             raise FileNotFoundError(
@@ -62,7 +66,26 @@ class DINOv3Adapter(nn.Module):
         tokens, grid_size = self.model.prepare_tokens_with_masks(images)
         return TokenBatch(tokens=tokens, grid_size=grid_size)
 
-    def forward_blocks(self, tokens: torch.Tensor, grid_size: tuple[int, int] | None = None):
+    def _rope_for_tokens(self, grid_size, num_images=1):
+        """Keep all DINO-specific multi-image position handling in this adapter.
+
+        Tokens are image-major: [all query patches, all context patches].
+        A flattened H x (2W) grid is row-major and MUST be reordered to match.
+        ``legacy`` deliberately reproduces the old mismatch for old checkpoints.
+        ``per_image`` reuses each image's native grid (an explicit ablation).
+        """
+        h, w = grid_size
+        if num_images == 1 or self.pair_rope_layout == "per_image":
+            rope = self.model.rope_embed(H=h, W=w)
+            return tuple(part.repeat(num_images, 1) for part in rope)
+        rope = self.model.rope_embed(H=h, W=w * num_images)
+        if self.pair_rope_layout == "legacy":
+            return rope
+        return tuple(torch.cat(part.reshape(h, w * num_images, -1).split(w, dim=1), dim=0)
+                     .reshape(h * w * num_images, -1) for part in rope)
+
+    def forward_blocks(self, tokens: torch.Tensor, grid_size: tuple[int, int] | None = None,
+                       *, num_images: int = 1):
         """Run official blocks then their final normalization.
 
         ``grid_size`` is required for custom concatenated token layouts because
@@ -70,8 +93,15 @@ class DINOv3Adapter(nn.Module):
         """
         if grid_size is None:
             raise ValueError("grid_size is required for DINOv3 RoPE")
-        rope = self.model.rope_embed(H=grid_size[0], W=grid_size[1])
+        if num_images < 1:
+            raise ValueError("num_images must be positive")
+        expected = 1 + self.model.n_storage_tokens + num_images * grid_size[0] * grid_size[1]
+        if tokens.shape[1] != expected:
+            raise ValueError(f"expected {expected} tokens for grid and image count, got {tokens.shape[1]}")
         x = tokens
         for block in self.model.blocks:
+            # Official DINOv3 regenerates RoPE per block, including training-time
+            # coordinate augmentation. One cached draw per forward differed from it.
+            rope = self._rope_for_tokens(grid_size, num_images)
             x = block(x, rope)
         return self.model.norm(x)
