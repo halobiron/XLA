@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TACS-X · Tủ thẻ kết quả</title>
+<meta name="description" content="Trình khám phá kết quả TACS-X trên CIFAR-100: so sánh các mode, xem context được chọn, ablation Top-K.">
+<link rel="stylesheet" href="fonts/fonts.css">
+<style>
+:root{
+  --felt:#15322b; --felt-2:#1d4338; --felt-line:#2b5c4e;
+  --brass:#d1ac52; --brass-ink:#6e530c;
+  --card:#edeee6; --card-2:#e2e4da; --card-edge:#c9ccbf;
+  --ink:#18243f; --ink-soft:#434f6b; --red:#b0301f;
+  --slate:#6a7893; --green:#1d6a55;
+  --serif:"Source Serif 4",Georgia,"Times New Roman",serif;
+  --sans:"Archivo","Segoe UI",system-ui,sans-serif;
+  --type:"Courier Prime","Courier New",monospace;
+  --ease:cubic-bezier(.16,1,.3,1);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:24px}
+body{margin:0;background:var(--felt);color:var(--ink);font:400 18px/1.6 var(--serif)}
+::selection{background:var(--brass);color:#1a1405}
+:focus-visible{outline:3px solid var(--brass);outline-offset:3px;border-radius:3px}
+a{color:inherit}
+button{font:inherit;color:inherit;cursor:pointer}
+.num{font-family:var(--type);font-variant-numeric:tabular-nums}
+
+/* ---------- frame: drawer rail ---------- */
+.shell{display:grid;grid-template-columns:260px minmax(0,1fr);max-width:1480px;margin:0 auto}
+.rail{position:sticky;top:0;height:100vh;padding:36px 24px;display:flex;flex-direction:column;gap:28px;border-right:1px solid var(--felt-line)}
+.brand{font:800 34px/1 var(--sans);font-stretch:75%;letter-spacing:-.01em;color:#f3efdc;margin:0}
+.brand small{display:block;margin-top:10px;font:500 13px/1.4 var(--sans);font-stretch:100%;color:#b9cdc4;letter-spacing:.02em}
+.tabs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.tabs a{display:block;text-decoration:none;padding:10px 14px 10px 16px;border-radius:4px 14px 14px 4px;
+  font:600 15px/1.3 var(--sans);color:#d5e2dc;background:var(--felt-2);border:1px solid var(--felt-line);transition:transform .25s var(--ease),background .2s}
+.tabs a:hover{transform:translateX(6px);background:#25554a}
+.tabs a[aria-current="true"]{background:var(--brass);color:#1a1405;border-color:var(--brass);transform:translateX(10px)}
+.rail-foot{margin-top:auto;font:500 13px/1.5 var(--sans);color:#9fb8ad}
+.rail-foot b{color:#e6efe9;font-weight:600}
+
+main{padding:36px 40px 120px;display:flex;flex-direction:column;gap:56px;min-width:0}
+
+/* ---------- catalog card ---------- */
+.card{position:relative;background:var(--card);border-radius:6px;padding:0 0 64px;box-shadow:0 1px 0 #fff8 inset,0 2px 0 var(--card-edge),0 22px 40px -18px #02100c99;overflow:hidden}
+.card::after{content:"";position:absolute;left:50%;bottom:22px;width:20px;height:20px;margin-left:-10px;border-radius:50%;
+  background:var(--felt);box-shadow:inset 0 2px 3px #000a,0 1px 0 #fff9}
+.card-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;padding:30px 44px 10px;border-bottom:2px solid var(--red)}
+.card-head h2{margin:0;font:800 clamp(28px,3.4vw,44px)/1.05 var(--sans);font-stretch:75%;letter-spacing:-.005em;text-wrap:balance;max-width:24ch}
+.callno{font:400 14px/1.4 var(--type);color:var(--ink-soft);text-align:right}
+.card-rule{height:0;border-top:1px solid #b9c7dc;margin:0 0 0}
+.card-body{padding:30px 44px 0}
+.lede{font-size:clamp(19px,1.9vw,23px);line-height:1.55;max-width:62ch;margin:0 0 24px;text-wrap:pretty}
+.lede strong{font-weight:700;box-shadow:inset 0 -.38em 0 #d1ac5266}
+.prose{max-width:66ch;margin:0 0 1em;text-wrap:pretty}
+.muted{color:var(--ink-soft)}
+.typed{font-family:var(--type);font-size:15px}
+.label{font:700 12px/1 var(--sans);letter-spacing:.09em;text-transform:uppercase;color:var(--ink-soft)}
+
+/* typed index entry list with dot leaders */
+.entries{list-style:none;margin:0 0 28px;padding:0;max-width:640px;font-family:var(--type)}
+.entries li{display:flex;align-items:baseline;gap:8px;padding:6px 0;font-size:19px}
+.entries li::after{content:"";order:2;flex:1;border-bottom:2px dotted #8b93a8;transform:translateY(-4px)}
+.entries .k{order:1}.entries .v{order:3;font-weight:700}
+.entries .v small{font-weight:400;font-size:14px;color:var(--ink-soft);margin-left:8px}
+.entries .hot .v{color:var(--red)}
+
+/* mechanism */
+.seg{display:inline-flex;flex-wrap:wrap;gap:0;border:2px solid var(--ink);border-radius:14px;overflow:hidden;background:var(--card)}
+.seg button{border:0;background:none;padding:9px 18px;font:600 14px/1 var(--sans);transition:background .2s,color .2s}
+.seg button+button{border-left:2px solid var(--ink)}
+.seg button[aria-pressed="true"]{background:var(--ink);color:#f3efdc}
+.flow{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0;margin:22px 0 14px;counter-reset:s}
+.step{position:relative;padding:14px 16px 16px;border:2px solid var(--ink);background:#f7f7f1;transition:opacity .3s,background .3s}
+.step+.step{margin-left:-2px}
+.step h3{margin:0 0 6px;font:700 15px/1.2 var(--sans)}
+.step p{margin:0;font:400 14px/1.45 var(--sans);color:var(--ink-soft)}
+.step .typed{display:block;margin-top:8px;font-size:13px;color:var(--ink)}
+.step.off{opacity:.38;background:transparent;border-style:dashed}
+.step.on{background:#fff}
+.flow-note{font:500 15px/1.5 var(--sans);color:var(--ink-soft);min-height:3em;max-width:80ch}
+.flow-note b{color:var(--ink)}
+
+/* comparison */
+.cmp{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(280px,1fr);gap:36px;align-items:start}
+.toolbar{display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-bottom:18px}
+.rows{display:flex;flex-direction:column;gap:2px}
+.row{display:grid;grid-template-columns:170px minmax(0,1fr) 78px;gap:12px;align-items:center;width:100%;text-align:left;
+  padding:8px 10px;border:2px solid transparent;border-radius:4px;background:none;position:relative}
+.row:hover{background:var(--card-2)}
+.row[aria-pressed="true"]{border-color:var(--ink);background:#f7f7f1}
+.row .name{font:600 15px/1.2 var(--sans)}
+.row .name small{display:block;font:400 12px/1.3 var(--sans);color:var(--ink-soft)}
+.track{position:relative;height:22px;background:repeating-linear-gradient(90deg,transparent 0 calc(10% - 1px),#c3c8d3 calc(10% - 1px) 10%)}
+.bar{position:absolute;inset:0 auto 0 0;width:0;transition:width .9s var(--ease)}
+.bar.b-ctx{background:var(--ink)} .bar.b-top1{background:var(--slate)} .bar.b-topk{background:var(--green)}
+.row .val{font:700 16px/1 var(--type);text-align:right}
+.legend{display:flex;gap:18px;flex-wrap:wrap;font:500 13px/1 var(--sans);color:var(--ink-soft);margin:14px 0 0}
+.legend i{display:inline-block;width:14px;height:14px;margin-right:6px;vertical-align:-2px}
+.basemark{position:absolute;top:-4px;bottom:-4px;width:0;border-left:2px dashed var(--red);pointer-events:none}
+.detail{position:sticky;top:20px;background:#f7f7f1;border:2px solid var(--ink);padding:20px 22px 22px}
+.detail h3{margin:0 0 2px;font:800 24px/1.1 var(--sans);font-stretch:75%}
+.detail .sub{font:400 13px/1.4 var(--type);color:var(--ink-soft);margin-bottom:14px;word-break:break-all}
+.detail dl{margin:0;display:grid;grid-template-columns:1fr auto;gap:2px 12px}
+.detail dt{font:500 14px/1.7 var(--sans);color:var(--ink-soft)}
+.detail dd{margin:0;font:700 15px/1.7 var(--type);text-align:right}
+.detail .gap{border-top:1px solid #aab2c4;margin-top:12px;padding-top:12px}
+.curve{width:100%;height:auto;display:block;margin-top:6px}
+.curve text{font:500 11px var(--sans);fill:var(--ink-soft)}
+.read{margin-top:12px;font:400 14px/1.5 var(--sans);color:var(--ink)}
+
+/* retrieval */
+.qstrip{display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 22px}
+.qbtn{padding:4px;border:2px solid var(--card-edge);background:#f7f7f1;border-radius:4px;line-height:0;transition:transform .2s var(--ease)}
+.qbtn:hover{transform:translateY(-3px)}
+.qbtn[aria-pressed="true"]{border-color:var(--ink);outline:2px solid var(--brass);outline-offset:2px}
+.qbtn img,.thumb{image-rendering:pixelated;display:block}
+.qbtn img{width:56px;height:56px}
+.qhead{display:flex;gap:20px;align-items:center;margin-bottom:12px}
+.qhead .thumb{width:112px;height:112px;border:2px solid var(--ink)}
+.qhead h3{margin:0;font:800 28px/1.1 var(--sans);font-stretch:75%}
+.qhead p{margin:4px 0 0;font:400 15px/1.45 var(--sans);color:var(--ink-soft)}
+.modes{display:flex;flex-direction:column;border-top:1px solid #aab2c4}
+.mrow{display:grid;grid-template-columns:190px minmax(0,1fr);gap:18px;padding:14px 0;border-bottom:1px solid #c9cedb;align-items:center}
+.mrow .name{font:700 15px/1.2 var(--sans)}
+.mrow .name small{display:block;margin-top:3px;font:400 12px/1.3 var(--type);color:var(--ink-soft)}
+.ctxs{display:flex;gap:14px;flex-wrap:wrap}
+.ctx{width:104px}
+.ctx .thumb{width:104px;height:104px;border:2px solid var(--card-edge)}
+.ctx .cl{font:600 13px/1.25 var(--sans);margin-top:5px}
+.tag{display:inline-block;margin-top:3px;padding:2px 7px;border-radius:999px;font:700 11px/1.3 var(--sans);letter-spacing:.03em}
+.tag.same{background:var(--green);color:#fff}
+.tag.diff{border:1.5px solid var(--ink-soft);color:var(--ink-soft)}
+.wbar{height:6px;background:#cfd4e0;margin-top:5px}.wbar i{display:block;height:100%;background:var(--green)}
+.wnum{font:400 12px/1 var(--type);color:var(--ink-soft)}
+.none{font:400 15px/1.5 var(--sans);color:var(--ink-soft)}
+.callout{margin-top:22px;max-width:70ch;padding:14px 18px;background:#f7f7f1;border:2px solid var(--ink);font:500 15px/1.55 var(--sans)}
+.callout b{font-weight:800}
+
+
+/* live recognition */
+.live-status{font:500 14px/1.4 var(--sans);color:var(--ink-soft);margin:0 0 16px;display:flex;align-items:center;gap:8px}
+.live-status i{width:10px;height:10px;border-radius:50%;background:var(--slate);display:inline-block;flex:none}
+.live-status.ready i{background:var(--green)}.live-status.err i{background:var(--red)}
+.drop{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-height:150px;padding:20px;text-align:center;
+  border:2.5px dashed var(--ink);border-radius:6px;background:#f7f7f1;cursor:pointer;transition:background .2s,transform .3s var(--ease)}
+.drop:hover,.drop.over{background:#fff;transform:translateY(-2px)}
+.drop b{font:800 22px/1.2 var(--sans);font-stretch:75%}
+.drop span{font:400 14px/1.5 var(--sans);color:var(--ink-soft);max-width:60ch}
+.drop input{position:absolute;opacity:0;pointer-events:none}
+.livebar{display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin:18px 0 8px}
+.btn{border:2px solid var(--ink);background:var(--ink);color:#f3efdc;padding:9px 16px;border-radius:999px;font:700 14px/1 var(--sans)}
+.btn.ghost{background:transparent;color:var(--ink)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.busy{font:500 15px/1.5 var(--sans);color:var(--ink-soft);padding:18px 0}
+.errbox{margin-top:16px;padding:12px 16px;border:2px solid var(--red);color:var(--red);font:600 15px/1.5 var(--sans);background:#f7f7f1}
+.res-top{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;margin:22px 0 10px;padding-bottom:18px;border-bottom:1px solid #aab2c4}
+.res-q .thumb{width:128px;height:128px;border:2px solid var(--ink)}
+.res-q p,.res-c p{margin:6px 0 0;font:500 13px/1.4 var(--sans);color:var(--ink-soft);max-width:48ch}
+.res-c .ctxs{gap:12px}.res-c .ctx{width:84px}.res-c .ctx .thumb{width:84px;height:84px}
+.ctx.picked .thumb{border-color:var(--ink);outline:3px solid var(--brass);outline-offset:1px}
+.pred{display:grid;grid-template-columns:190px minmax(0,1fr) minmax(0,1.1fr);gap:20px;padding:16px 0;border-bottom:1px solid #c9cedb;align-items:start}
+.pred .name{font:700 15px/1.2 var(--sans)}
+.pred .name small{display:block;margin-top:3px;font:400 12px/1.3 var(--sans);color:var(--ink-soft)}
+.top1{font:800 26px/1.1 var(--sans);font-stretch:75%}
+.top1 .num{font-size:18px;margin-left:8px;font-weight:700}
+.verdict{display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;font:700 11px/1.4 var(--sans);vertical-align:3px}
+.verdict.ok{background:var(--green);color:#fff}.verdict.no{border:1.5px solid var(--red);color:var(--red)}
+.tp{display:grid;grid-template-columns:96px minmax(0,1fr) 46px;gap:8px;align-items:center;margin-top:5px;font:500 13px/1.2 var(--sans)}
+.tp .track{height:10px;background:#d4d8e2}.tp .bar{background:var(--slate);width:0}
+.tp:first-of-type .bar{background:var(--ink)}
+.tp .val{font:700 12px/1 var(--type);text-align:right}
+.pred .ctxs{gap:10px}.pred .ctx{width:76px}.pred .ctx .thumb{width:76px;height:76px}
+@media (max-width:1180px){.pred{grid-template-columns:1fr}}
+
+/* ablation */
+.abl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:36px}
+.abl h3{margin:0 0 4px;font:800 21px/1.15 var(--sans);font-stretch:75%}
+.abl .sub{font:400 14px/1.5 var(--sans);color:var(--ink-soft);margin:0 0 14px;min-height:3.1em}
+.mini{display:grid;grid-template-columns:92px minmax(0,1fr) 62px;gap:10px;align-items:center;padding:5px 0;font:600 14px/1.2 var(--sans)}
+.mini .track{height:18px}
+.mini .val{font:700 14px/1 var(--type);text-align:right}
+.mini small{display:block;font:400 11px/1.2 var(--sans);color:var(--ink-soft)}
+.note{font:400 14px/1.55 var(--sans);color:var(--ink);margin-top:12px}
+.c16{margin-top:36px;border-top:1px solid #aab2c4;padding-top:22px}
+table{border-collapse:collapse;width:100%;font:500 15px/1.4 var(--sans)}
+th,td{padding:9px 12px;text-align:left;border-bottom:1px solid #c3c8d3}
+th{font:700 12px/1.2 var(--sans);letter-spacing:.07em;text-transform:uppercase;color:var(--ink-soft);border-bottom:2px solid var(--ink)}
+td.n,th.n{text-align:right;font-family:var(--type);font-variant-numeric:tabular-nums}
+td.n{font-weight:700}
+.pos{color:var(--green)}.neg{color:var(--red)}
+
+/* protocol */
+.proto{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:44px}
+.proto h3{margin:0 0 10px;font:800 21px/1.15 var(--sans);font-stretch:75%}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 18px;margin:0;font-size:16px}
+.kv dt{font:500 14px/1.6 var(--sans);color:var(--ink-soft)} .kv dd{margin:0;font-family:var(--type);font-weight:700;font-size:15px}
+.caveats{margin:0;padding-left:1.1em;max-width:60ch} .caveats li{margin-bottom:.7em;padding-left:.2em}
+.stamp{display:inline-block;margin-top:18px;padding:8px 14px;border:2px solid var(--red);color:var(--red);font:800 14px/1.3 var(--sans);letter-spacing:.06em;text-transform:uppercase;transform:rotate(-1.2deg)}
+
+/* entrance: cards slide up like drawer cards, once */
+@media (prefers-reduced-motion:no-preference){
+  .card{animation:rise .8s var(--ease) both}
+  .card:nth-of-type(2){animation-delay:.08s}.card:nth-of-type(3){animation-delay:.16s}
+  @keyframes rise{from{opacity:0;transform:translateY(36px)}}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto}.bar{transition:none}}
+
+/* ---------- responsive ---------- */
+@media (max-width:1180px){
+  .cmp{grid-template-columns:1fr}.detail{position:static}
+  .abl{grid-template-columns:1fr}.proto{grid-template-columns:1fr}
+  .flow{grid-template-columns:1fr 1fr}.step+.step{margin-left:0}.step{margin:-2px 0 0 -2px}
+}
+@media (max-width:900px){
+  .shell{grid-template-columns:1fr}
+  .rail{position:sticky;height:auto;z-index:5;flex-direction:row;align-items:center;gap:14px;padding:10px 16px;border-right:0;border-bottom:1px solid var(--felt-line);background:var(--felt);overflow-x:auto}
+  .brand{font-size:22px;white-space:nowrap}.brand small,.rail-foot{display:none}
+  .tabs{flex-direction:row}.tabs a{white-space:nowrap;padding:8px 12px;font-size:14px;border-radius:14px 14px 4px 4px}
+  .tabs a:hover,.tabs a[aria-current="true"]{transform:none}
+  main{padding:20px 16px 80px;gap:36px}
+  .card-head{padding:22px 20px 8px}.card-body{padding:22px 20px 0}
+  .row{grid-template-columns:120px minmax(0,1fr) 64px;gap:8px}
+  .mrow{grid-template-columns:1fr;gap:8px}
+  .qhead .thumb{width:84px;height:84px}
+  .entries li{font-size:16px}
+}
+@media (max-width:560px){.flow{grid-template-columns:1fr}.row .name small{display:none}.mini{grid-template-columns:78px minmax(0,1fr) 54px}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <nav class="rail" aria-label="Các ngăn tủ">
+    <h1 class="brand">TACS-X<small>Tủ thẻ kết quả<br>CIFAR-100 · DINOv3 ViT-S/16</small></h1>
+    <ul class="tabs" id="tabs">
+      <li><a href="#ket-luan">Kết luận &amp; cơ chế</a></li>
+      <li><a href="#so-sanh">So sánh các mode</a></li>
+      <li><a href="#truy-hoi">Truy hồi context</a></li>
+      <li><a href="#thu">Thử nhận diện</a></li>
+      <li><a href="#ablation">Ablation</a></li>
+      <li><a href="#giao-thuc">Giao thức &amp; lưu ý</a></li>
+    </ul>
+    <div class="rail-foot"><b id="nruns">–</b> run có artifact trong <span class="typed">outputs/</span>.<br>Mini reproduction, không phải tái lập chính xác bài báo.</div>
+  </nav>
+
+  <main>
+    <!-- 1 -->
+    <section class="card" id="ket-luan" aria-labelledby="h1">
+      <header class="card-head"><h2 id="h1">Chọn ảnh ngữ cảnh có giúp phân loại không?</h2>
+        <div class="callno">TACS · CVPR 2026<br>CIFAR-100 · C=4 · 5 epoch · seed 42</div></header>
+      <div class="card-body">
+        <p class="lede">Trong cấu hình mini này, <strong>chưa</strong>. Chỉ dùng ảnh query đã đạt 82,79%; thêm một ảnh context khác lớp làm giảm xuống còn khoảng 44–49%. Gộp nhiều context bằng Top-K kéo lại lên 70,99%, nhưng vẫn thấp hơn No-Context.</p>
+        <ul class="entries" aria-label="Ba số liệu chính">
+          <li><span class="k">No-Context (chỉ query)</span><span class="v" id="e-noctx">–</span></li>
+          <li class="hot"><span class="k">Full TACS, chọn 1 context</span><span class="v" id="e-full">–</span></li>
+          <li><span class="k">TACS-X Top-K, K=4</span><span class="v" id="e-topk">–</span></li>
+        </ul>
+
+        <p class="label" style="margin-bottom:10px">Cơ chế · chọn một mode để xem đường nào được bật</p>
+        <div class="seg" id="modeSeg" role="group" aria-label="Chọn mode">
+          <button aria-pressed="false" data-m="gumbel">Gumbel-only</button>
+          <button aria-pressed="false" data-m="policy">Policy-only</button>
+          <button aria-pressed="true" data-m="full">Full TACS</button>
+          <button aria-pressed="false" data-m="topk">Top-K</button>
+        </div>
+        <div class="flow" id="flow">
+          <div class="step on" data-s="query"><h3>Query + pool</h3><p>Ảnh query và C ứng viên lấy từ pool cố định (chỉ từ tập train, loại chính query).</p><span class="typed">C = 4</span></div>
+          <div class="step on" data-s="selector"><h3>Selector</h3><p>ViT-S/16 chấm điểm từng ứng viên, tạo phân phối categorical.</p><span class="typed">softmax(score)</span></div>
+          <div class="step" data-s="gumbel"><h3>Đường khả vi</h3><p>Straight-through Gumbel-Softmax: one-hot ở forward, gradient mềm ở backward.</p><span class="typed">τ = 0,1</span></div>
+          <div class="step" data-s="policy"><h3>Đường chính sách</h3><p>Reward bằng CE(query) trừ CE(query+context); REINFORCE trên action đã chọn.</p><span class="typed">−log π · A</span></div>
+          <div class="step on" data-s="vit"><h3>ViT hai ảnh</h3><p>Nối patch của query và context trước các block transformer, rồi phân loại.</p><span class="typed">L = L_task + λ·L_policy</span></div>
+        </div>
+        <p class="flow-note" id="flowNote" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <!-- 2 -->
+    <section class="card" id="so-sanh" aria-labelledby="h2">
+      <header class="card-head"><h2 id="h2">So sánh các mode dưới cùng ngân sách</h2>
+        <div class="callno">Nhóm A · 10 run · C=4<br>backbone đóng băng</div></header>
+      <div class="card-body">
+        <p class="prose muted">Chọn một hàng để xem chi tiết. Đường đỏ nét đứt là mốc No-Context.</p>
+        <div class="cmp">
+          <div>
+            <div class="toolbar">
+              <span class="label">Chỉ số</span>
+              <div class="seg" id="metricSeg" role="group" aria-label="Chỉ số hiển thị">
+                <button aria-pressed="true" data-k="test">Test acc</button>
+                <button aria-pressed="false" data-k="val">Val acc tốt nhất</button>
+              </div>
+            </div>
+            <div class="rows" id="rows"></div>
+            <div class="legend"><span><i style="background:var(--ink)"></i>Không context</span><span><i style="background:var(--slate)"></i>Chọn 1 context</span><span><i style="background:var(--green)"></i>Gộp Top-K</span></div>
+          </div>
+          <aside class="detail" id="detail" aria-live="polite"></aside>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3 -->
+    <section class="card" id="truy-hoi" aria-labelledby="h3t">
+      <header class="card-head"><h2 id="h3t">Mỗi mode chọn context nào cho cùng một query?</h2>
+        <div class="callno">12 query test · lớp khác nhau<br>ảnh thật từ CIFAR-100</div></header>
+      <div class="card-body">
+        <p class="prose muted">Chọn một query. Mỗi hàng là một mode; với Top-K, thanh dưới ảnh là trọng số của context đó.</p>
+        <div class="qstrip" id="qstrip" role="group" aria-label="Chọn query"></div>
+        <div class="qhead" id="qhead"></div>
+        <div class="modes" id="modes"></div>
+        <div class="callout"><b>Điều cần nhớ:</b> trên toàn tập test, 96–99% context được chọn thuộc lớp khác query, kể cả với DINO-similarity (96,57%). CIFAR-100 có 100 lớp nên trong 4 ứng viên hầu như không có ảnh cùng lớp. Vì vậy Top-K tăng không có nghĩa là selector đã tìm được ảnh cùng lớp.</div>
+      </div>
+    </section>
+
+
+    <!-- 3b -->
+    <section class="card" id="thu" aria-labelledby="h3b">
+      <header class="card-head"><h2 id="h3b">Thử nhận diện ảnh của bạn</h2>
+        <div class="callno">Suy luận thật trên CPU<br>4 checkpoint đã huấn luyện</div></header>
+      <div class="card-body">
+        <p class="live-status" id="liveStatus" aria-live="polite"><i></i><span>Đang kiểm tra máy chủ…</span></p>
+        <label class="drop" id="drop" tabindex="0"><input type="file" id="file" accept="image/*">
+          <b>Thả ảnh vào đây, bấm để chọn, hoặc dán bằng Ctrl+V</b>
+          <span>JPG, PNG, WebP, tối đa 12 MB. Ảnh được cắt vuông và thu về 32×32 như CIFAR-100 trước khi vào mô hình.</span></label>
+        <p class="label" style="margin:18px 0 8px">Hoặc chọn một ảnh thuộc tập test (biết nhãn thật)</p>
+        <div class="qstrip" id="samples" role="group" aria-label="Ảnh test mẫu"></div>
+        <div class="livebar">
+          <span class="label">Số ứng viên C</span>
+          <div class="seg" id="cSeg" role="group" aria-label="Số ứng viên">
+            <button aria-pressed="true" data-c="4">4 (đúng giao thức)</button><button aria-pressed="false" data-c="8">8</button><button aria-pressed="false" data-c="16">16</button>
+          </div>
+          <button class="btn ghost" id="resample" disabled>Rút ứng viên khác</button>
+        </div>
+        <div id="liveOut" aria-live="polite"></div>
+        <div class="callout"><b>Cần biết:</b> mô hình chỉ có 100 lớp của CIFAR-100, nên ảnh ngoài các lớp đó vẫn bị gán vào một lớp gần nhất. Các mô hình được huấn luyện với C=4; C khác chỉ để quan sát. Hai selector top-1 ở đây chọn ứng viên điểm cao nhất (argmax), còn lúc đánh giá test thì lấy mẫu theo phân phối, nên kết quả từng ảnh có thể khác bảng số liệu.</div>
+      </div>
+    </section>
+
+    <!-- 4 -->
+    <section class="card" id="ablation" aria-labelledby="h4">
+      <header class="card-head"><h2 id="h4">Ablation: K, ngưỡng adaptive và số ứng viên</h2>
+        <div class="callno">Test acc · seed 42<br>5 epoch · batch 32</div></header>
+      <div class="card-body">
+        <div class="abl" id="abl"></div>
+        <div class="c16">
+          <h3 style="margin:0 0 4px;font:800 21px/1.15 var(--sans);font-stretch:75%">Tăng pool từ C=4 lên C=16</h3>
+          <p class="prose muted" style="margin-bottom:12px">Các run C=16 chưa có bản action-fix tương ứng cho mọi mode, nên chỉ dùng để xem xu hướng, không so trực tiếp với nhóm A.</p>
+          <div style="overflow-x:auto"><table id="c16tbl"></table></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5 -->
+    <section class="card" id="giao-thuc" aria-labelledby="h5">
+      <header class="card-head"><h2 id="h5">Giao thức và những điều không nên suy ra</h2>
+        <div class="callno">Ghi lại mọi sai khác<br>so với bài báo</div></header>
+      <div class="card-body">
+        <div class="proto">
+          <div>
+            <h3>Thiết lập</h3>
+            <dl class="kv">
+              <dt>Dữ liệu</dt><dd>CIFAR-100, 45.000 / 5.000 / 10.000</dd>
+              <dt>Backbone</dt><dd>DINOv3 ViT-S/16, đóng băng</dd>
+              <dt>Ảnh</dt><dd>224 × 224</dd>
+              <dt>Huấn luyện</dt><dd>5 epoch, batch 32, AdamW</dd>
+              <dt>Ứng viên / query</dt><dd>C = 4 (bài báo: 16)</dd>
+              <dt>Pool</dt><dd>cố định, chỉ từ train</dd>
+              <dt>τ · λ_policy</dt><dd>0,1 · 1,0</dd>
+              <dt>Chọn checkpoint</dt><dd>theo validation</dd>
+            </dl>
+          </div>
+          <div>
+            <h3>Lưu ý khi đọc kết quả</h3>
+            <ul class="caveats">
+              <li>Đây là mini reproduction. Selector học được <b>chưa vượt</b> DINO-similarity, trái với Bảng 2/5 của bài báo.</li>
+              <li>Chênh lệch giữa Gumbel, Policy-only và Full TACS (dưới 0,3 điểm) nằm trong nhiễu của một seed.</li>
+              <li>Multi-seed chỉ có 2 seed (42 và 1) cho 5 cấu hình, chưa đủ để kết luận thống kê.</li>
+              <li>Adaptive Top-K ở ngưỡng 0,90 chọn 3 context cho 98,52% mẫu, tức gần như Top-3 cố định.</li>
+              <li>Run mở khóa 4 block cuối (48,63%) là cấu hình huấn luyện khác, không so với nhóm A.</li>
+            </ul>
+            <span class="stamp">Không phải tái lập chính xác</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="data.js"></script>
+<script>
+(function(){
+const D = window.TACS_DATA;
+const $ = (s,r=document)=>r.querySelector(s);
+const el=(t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e};
+const fmt=(x,d=2)=>x==null?'–':x.toLocaleString('vi-VN',{minimumFractionDigits:d,maximumFractionDigits:d});
+const pct=(x,d=2)=>x==null?'–':fmt(x*100,d)+'%';
+const byId=Object.fromEntries(D.runs.map(r=>[r.id,r]));
+$('#nruns').textContent=D.runs.length;
+
+const NAME={no_context:'No-Context',random_context:'Random',dino_similarity:'DINO-similarity',gumbel_only:'Gumbel-only',policy_only:'Policy-only',full_tacs:'Full TACS',topk_tacs:'Top-K',adaptive_topk_tacs:'Adaptive Top-K'};
+const SUB={no_context:'chỉ ảnh query',random_context:'1 trong 4, ngẫu nhiên',dino_similarity:'cosine DINO đóng băng',gumbel_only:'chỉ đường khả vi',policy_only:'chỉ REINFORCE',full_tacs:'Gumbel + policy',topk_tacs:'gộp K context',adaptive_topk_tacs:'ngưỡng 0,90'};
+function title(r){return r.mode==='topk_tacs'?`Top-K, K=${r.K}`:NAME[r.mode]}
+function cls(r){return r.mode==='no_context'?'b-ctx':(r.mode==='topk_tacs'||r.mode==='adaptive_topk_tacs')?'b-topk':'b-top1'}
+
+/* 1. headline entries */
+const A=id=>byId[id];
+$('#e-noctx').innerHTML=pct(A('cifar100_no_context_c4_e5').test);
+$('#e-full').innerHTML=pct(A('cifar100_full_tacs_c4_e5_actionfix').test);
+$('#e-topk').innerHTML=pct(A('cifar100_topk_k4_c4_e5').test);
+
+/* mechanism */
+const MODES={
+ gumbel:{on:['gumbel'],note:'<b>Gumbel-only:</b> selector học chỉ nhờ gradient của task loss, đi qua one-hot straight-through. Không có reward.'},
+ policy:{on:['policy'],note:'<b>Policy-only:</b> context được chọn bằng một action lấy mẫu; selector học chỉ từ REINFORCE với advantage = CE(query) − CE(query + context). Reward bị detach, không backprop qua nó.'},
+ full:{on:['gumbel','policy'],note:'<b>Full TACS:</b> cả hai đường cùng chạy trên <em>cùng một action</em>: task loss cho gradient khả vi, policy loss cho tín hiệu “context này có giúp không”.'},
+ topk:{on:['gumbel'],note:'<b>TACS-X Top-K:</b> thay vì one-hot, lấy K ứng viên điểm cao nhất và gộp bằng trọng số softmax (tổng bằng 1). Chỉ tối ưu task loss, không gọi nhánh reward.'}
+};
+function setMode(m){
+  document.querySelectorAll('#modeSeg button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.m===m));
+  document.querySelectorAll('#flow .step').forEach(s=>{
+    const k=s.dataset.s, base=['query','selector','vit'].includes(k);
+    const on=base||MODES[m].on.includes(k);
+    s.classList.toggle('on',on);s.classList.toggle('off',!on);
+  });
+  $('#flowNote').innerHTML=MODES[m].note;
+}
+document.querySelectorAll('#modeSeg button').forEach(b=>b.onclick=()=>setMode(b.dataset.m));
+setMode('full');
+
+/* 2. comparison */
+let metric='test', sel='cifar100_full_tacs_c4_e5_actionfix';
+const rowsEl=$('#rows');
+function drawRows(first){
+  const items=D.main.map(id=>byId[id]).sort((a,b)=>b[metric]-a[metric]);
+  const base=byId['cifar100_no_context_c4_e5'][metric];
+  rowsEl.innerHTML='';
+  items.forEach(r=>{
+    const b=el('button','row');b.setAttribute('aria-pressed',r.id===sel);
+    b.innerHTML=`<span class="name">${title(r)}<small>${SUB[r.mode]}</small></span><span class="track"><span class="bar ${cls(r)}" data-w="${r[metric]*100}"></span><span class="basemark" style="left:${base*100}%"></span></span><span class="val">${pct(r[metric])}</span>`;
+    b.onclick=()=>{sel=r.id;drawRows();drawDetail()};
+    rowsEl.appendChild(b);
+  });
+  requestAnimationFrame(()=>requestAnimationFrame(()=>rowsEl.querySelectorAll('.bar').forEach(x=>x.style.width=x.dataset.w+'%')));
+}
+document.querySelectorAll('#metricSeg button').forEach(b=>b.onclick=()=>{
+  metric=b.dataset.k;document.querySelectorAll('#metricSeg button').forEach(x=>x.setAttribute('aria-pressed',x===b));drawRows();});
+
+function curve(r){
+  const v=r.valCurve; if(!v.length) return '';
+  const W=300,H=120,L=36,R=12,T=10,B=24, lo=Math.min(...v)-.02, hi=Math.max(...v)+.02;
+  const x=i=>L+(W-L-R)*i/(v.length-1||1), y=a=>T+(H-T-B)*(1-(a-lo)/(hi-lo));
+  const pts=v.map((a,i)=>`${x(i)},${y(a)}`).join(' ');
+  const ticks=[lo,(lo+hi)/2,hi].map(t=>`<line x1="${L}" x2="${W-R}" y1="${y(t)}" y2="${y(t)}" stroke="#c3c8d3"/><text x="${L-5}" y="${y(t)+4}" text-anchor="end">${Math.round(t*100)}%</text>`).join('');
+  const xs=v.map((_,i)=>`<text x="${x(i)}" y="${H-6}" text-anchor="middle">${i+1}</text>`).join('');
+  const dots=v.map((a,i)=>`<circle cx="${x(i)}" cy="${y(a)}" r="3.5" fill="var(--ink)"/>`).join('');
+  return `<svg class="curve" viewBox="0 0 ${W} ${H}" role="img" aria-label="Validation accuracy theo epoch, từ ${pct(v[0],1)} đến ${pct(v[v.length-1],1)}">${ticks}${xs}<polyline points="${pts}" fill="none" stroke="var(--ink)" stroke-width="2.5"/>${dots}<text x="${W-R}" y="${H-6}" text-anchor="end" style="display:none"></text></svg><div class="typed muted" style="font-size:12px">Val acc theo epoch (1–${v.length})</div>`;
+}
+function reading(r){
+  const base=byId['cifar100_no_context_c4_e5'].test, d=(r.test-base)*100;
+  if(r.mode==='no_context') return 'Mốc so sánh: mô hình chỉ thấy ảnh query. Mọi mode có context phải vượt mốc này mới chứng minh context hữu ích.';
+  return `So với No-Context: <b class="${d<0?'neg':'pos'}">${d>0?'+':''}${fmt(d,2)} điểm</b>. ${r.cross!=null?`${pct(r.cross,1)} context khác lớp với query.`:''}`;
+}
+function drawDetail(){
+  const r=byId[sel];
+  $('#detail').innerHTML=`<h3>${title(r)}</h3><div class="sub">${r.id}</div>
+  <dl><dt>Test acc</dt><dd>${pct(r.test)}</dd><dt>Val acc tốt nhất</dt><dd>${pct(r.val)}</dd><dt>Test loss</dt><dd>${fmt(r.loss,4)}</dd>
+  <dt>Entropy selector</dt><dd>${fmt(r.entropy,3)}${r.mode==='no_context'?'':' / 1,386'}</dd>
+  <dt>Context khác lớp</dt><dd>${pct(r.cross,2)}</dd><dt>Cosine query–context</dt><dd>${fmt(r.cos,3)}</dd><dt>Mean reward</dt><dd>${r.reward==null?'không áp dụng':fmt(r.reward,3)}</dd></dl>
+  <div class="gap">${curve(r)}</div><p class="read">${reading(r)}</p>`;
+}
+drawRows();drawDetail();
+
+/* 3. retrieval */
+let qi=0;
+const strip=$('#qstrip');
+D.queries.forEach((q,i)=>{
+  const b=el('button','qbtn');b.setAttribute('aria-pressed',i===0);b.setAttribute('aria-label','Query: '+q.label);
+  b.innerHTML=`<img src="${D.images[q.img]}" alt="">`;
+  b.onclick=()=>{qi=i;strip.querySelectorAll('button').forEach((x,j)=>x.setAttribute('aria-pressed',j===i));drawQ()};
+  strip.appendChild(b);
+});
+function drawQ(){
+  const q=D.queries[qi];
+  $('#qhead').innerHTML=`<img class="thumb" src="${D.images[q.img]}" alt="Ảnh query: ${q.label}"><div><h3>${q.label.replace(/_/g,' ')}</h3><p>Query #${q.q-50000} của tập test. Nhãn thật: <b>${q.label.replace(/_/g,' ')}</b>.</p></div>`;
+  const m=$('#modes');m.innerHTML='';
+  D.main.filter(id=>id!=='cifar100_no_context_c4_e5').forEach(id=>{
+    const r=byId[id], ctx=q.modes[id];
+    const row=el('div','mrow');
+    row.appendChild(el('div','name',`${title(r)}<small>${SUB[r.mode]}</small>`));
+    const box=el('div','ctxs');
+    if(!ctx) box.innerHTML='<span class="none">Không có metadata.</span>';
+    else ctx.forEach(c=>{
+      const d=el('div','ctx');
+      d.innerHTML=`<img class="thumb" src="${D.images[c.img]}" alt="Context ${c.label}"><div class="cl">${c.label.replace(/_/g,' ')}</div><span class="tag ${c.same?'same':'diff'}">${c.same?'cùng lớp':'khác lớp'}</span>${ctx.length>1?`<div class="wbar"><i style="width:${c.w*100}%"></i></div><div class="wnum">w = ${fmt(c.w,2)}</div>`:''}`;
+      box.appendChild(d);
+    });
+    row.appendChild(box);m.appendChild(row);
+  });
+  const nc=el('div','mrow');nc.appendChild(el('div','name','No-Context<small>chỉ ảnh query</small>'));
+  nc.appendChild(el('div','none','Không dùng ảnh context.'));m.insertBefore(nc,m.firstChild);
+}
+drawQ();
+
+
+/* 3b. live recognition (needs `python -m tacsx.serve`) */
+(function(){
+  let C=4, last=null, resample=0, busy=false, apiOk=false;
+  const out=$('#liveOut'), st=$('#liveStatus'), rs=$('#resample');
+  function setStatus(cls,msg){st.className='live-status '+cls;st.querySelector('span').textContent=msg}
+  async function ping(){
+    if(location.protocol==='file:'){setStatus('err','Trang đang mở bằng file. Chạy "python -m tacsx.serve" rồi mở http://127.0.0.1:8765 để dùng tính năng này.');return}
+    try{
+      const r=await (await fetch('/api/status',{cache:'no-store'})).json();
+      if(r.status==='ready'){apiOk=true;setStatus('ready','Máy chủ sẵn sàng. 4 mô hình đã nạp.')}
+      else if(r.status==='loading'){setStatus('','Máy chủ đang nạp mô hình, vài chục giây…');setTimeout(ping,3000)}
+      else setStatus('err','Máy chủ lỗi: '+r.error);
+    }catch(e){setStatus('err','Chưa kết nối được máy chủ suy luận. Chạy "python -m tacsx.serve" trong thư mục dự án.')}
+  }
+  ping();
+
+  const samples=$('#samples');
+  D.queries.forEach(q=>{
+    const b=el('button','qbtn');b.setAttribute('aria-label','Ảnh test: '+q.label);b.innerHTML=`<img src="${D.images[q.img]}" alt="">`;
+    b.onclick=()=>run({test:q.q-50000});samples.appendChild(b);
+  });
+
+  async function run(src){
+    if(!apiOk){await ping();if(!apiOk)return}
+    if(busy)return;busy=true;last=src;
+    out.innerHTML='<p class="busy">Đang chạy 4 mô hình trên CPU…</p>';
+    try{
+      let res;
+      if(src.test!=null) res=await fetch(`/api/predict-test?idx=${src.test}&c=${C}&r=${resample}`,{cache:'no-store'});
+      else res=await fetch(`/api/predict?c=${C}&r=${resample}`,{method:'POST',body:src.file});
+      const j=await res.json(); if(!res.ok) throw new Error(j.error||'Lỗi không rõ');
+      render(j); rs.disabled=false;
+    }catch(e){out.innerHTML=`<div class="errbox">${e.message}</div>`}
+    busy=false;
+  }
+  const nm=s=>s.replace(/_/g,' ');
+  function render(j){
+    const cands=j.candidates;
+    const ctxHtml=picks=>picks.map(p=>{const c=cands[p.i];return `<div class="ctx"><img class="thumb" src="${c.img}" alt="Context ${nm(c.label)}"><div class="cl">${nm(c.label)}</div>${picks.length>1?`<div class="wbar"><i style="width:${p.w*100}%"></i></div><div class="wnum">w = ${fmt(p.w,2)}</div>`:''}</div>`}).join('');
+    const pickedAny=new Set(j.results.flatMap(r=>r.picks.map(p=>p.i)));
+    let h=`<div class="res-top"><div class="res-q"><img class="thumb" src="${j.query}" alt="Ảnh query sau khi thu về 32×32"><p>Query (32×32)${j.trueLabel?`<br>Nhãn thật: <b>${nm(j.trueLabel)}</b>`:'<br>Ảnh của bạn, chưa có nhãn thật'}</p></div>
+      <div class="res-c"><div class="ctxs">${cands.map((c,i)=>`<div class="ctx ${pickedAny.has(i)?'picked':''}"><img class="thumb" src="${c.img}" alt="Ứng viên ${nm(c.label)}"><div class="cl">${nm(c.label)}</div></div>`).join('')}</div><p>${j.c} ứng viên lấy từ pool cố định (khung vàng: ít nhất một mode đã chọn). Chạy trong ${fmt(j.seconds,2)} giây.</p></div></div>`;
+    j.results.forEach(r=>{
+      const t=r.top[0], ok=j.trueLabel?(t.label===j.trueLabel):null;
+      h+=`<div class="pred"><div class="name">${r.name}<small>${r.key==='no_context'?'không dùng ảnh context':r.picks.length>1?'gộp '+r.picks.length+' context':'chọn 1 context'}</small></div>
+        <div><div class="top1">${nm(t.label)}<span class="num">${pct(t.p,1)}</span>${ok==null?'':`<span class="verdict ${ok?'ok':'no'}">${ok?'đúng':'sai'}</span>`}</div>
+        ${r.top.slice(0,3).map(x=>`<div class="tp"><span>${nm(x.label)}</span><span class="track"><span class="bar" style="width:${x.p*100}%"></span></span><span class="val">${pct(x.p,1)}</span></div>`).join('')}</div>
+        <div class="ctxs">${r.picks.length?ctxHtml(r.picks):'<span class="none">Không có ảnh context.</span>'}</div></div>`;
+    });
+    out.innerHTML=h;
+  }
+  const file=$('#file'), drop=$('#drop');
+  const take=f=>{if(f&&f.type.startsWith('image/')){resample=0;run({file:f})}else if(f)out.innerHTML='<div class="errbox">File này không phải ảnh.</div>'};
+  file.onchange=()=>take(file.files[0]);
+  ['dragenter','dragover'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add('over')}));
+  ['dragleave','drop'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove('over')}));
+  drop.addEventListener('drop',ev=>take(ev.dataTransfer.files[0]));
+  drop.addEventListener('keydown',ev=>{if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();file.click()}});
+  document.addEventListener('paste',ev=>{const f=[...(ev.clipboardData?.files||[])][0];if(f)take(f)});
+  document.querySelectorAll('#cSeg button').forEach(b=>b.onclick=()=>{C=+b.dataset.c;document.querySelectorAll('#cSeg button').forEach(x=>x.setAttribute('aria-pressed',x===b));if(last)run(last)});
+  rs.onclick=()=>{resample++;if(last)run(last)};
+})();
+
+/* 4. ablation */
+const abl=$('#abl');
+function block(h,sub,items,note){
+  const d=el('div');d.innerHTML=`<h3>${h}</h3><p class="sub">${sub}</p>`;
+  items.forEach(([n,s,v,c])=>{
+    const m=el('div','mini');
+    m.innerHTML=`<span>${n}${s?`<small>${s}</small>`:''}</span><span class="track"><span class="bar ${c}" data-w="${v*100}"></span></span><span class="val">${pct(v,1)}</span>`;
+    d.appendChild(m);
+  });
+  d.appendChild(el('p','note',note));abl.appendChild(d);
+}
+const T=id=>byId[id].test;
+block('Số context K','Gộp K ứng viên top bằng trọng số khả vi.',
+ [['Top-1','Full TACS',T('cifar100_full_tacs_c4_e5_actionfix'),'b-top1'],['K = 2','',T('cifar100_topk_k2_c4_e5'),'b-topk'],['K = 3','',T('cifar100_topk_k3_c4_e5'),'b-topk'],['K = 4','dùng cả 4',T('cifar100_topk_k4_c4_e5'),'b-topk'],['No-Context','mốc',T('cifar100_no_context_c4_e5'),'b-ctx']],
+ 'Càng nhiều context càng tốt, nhưng K=4 đã dùng hết pool C=4, nên phần tăng một phần là do bỏ việc “chọn”.');
+block('Ngưỡng adaptive','Số context thay đổi theo mẫu, theo độ tập trung của điểm.',
+ [['0,50','',T('cifar100_adaptive_thr50_c4_e5'),'b-topk'],['0,70','',T('cifar100_adaptive_thr70_c4_e5'),'b-topk'],['0,90','',T('cifar100_adaptive_topk_c4_e5'),'b-topk'],['Top-3','cố định',T('cifar100_topk_k3_c4_e5'),'b-topk']],
+ 'Ở 0,90, 98,52% mẫu dùng đúng 3 context, nên adaptive gần như trùng Top-3 (69,12% so với 69,04%). Chưa chứng minh lợi ích riêng của adaptive-K.');
+block('Hai seed','Chỉ có cho 5 cấu hình; không đủ để kết luận thống kê.',
+ [['No-Context','s42',T('cifar100_no_context_c4_e5'),'b-ctx'],['No-Context','s1',T('cifar100_no_context_c4_e5_s1'),'b-ctx'],['Full TACS','s42',T('cifar100_full_tacs_c4_e5_actionfix'),'b-top1'],['Full TACS','s1',T('cifar100_full_tacs_c4_e5_s1'),'b-top1'],['Top-K K=2','s42',T('cifar100_topk_k2_c4_e5'),'b-topk'],['Top-K K=2','s1',T('cifar100_topk_k2_c4_e5_s1'),'b-topk']],
+ 'Hai seed khác nhau dưới 0,6 điểm ở mỗi cặp. Thứ tự các nhóm không đổi.');
+requestAnimationFrame(()=>requestAnimationFrame(()=>abl.querySelectorAll('.bar').forEach(x=>x.style.width=x.dataset.w+'%')));
+
+const pairs=[['Random','cifar100_random_c4_e5','cifar100_random_c16_e5'],['DINO-similarity','cifar100_dino_sim_c4_e5','cifar100_dino_sim_c16_e5'],['Gumbel-only','cifar100_gumbel_c4_e5_actionfix','cifar100_gumbel_c16_e5'],['Policy-only','cifar100_policy_c4_e5_actionfix','cifar100_policy_c16_e5'],['Full TACS','cifar100_full_tacs_c4_e5_actionfix','cifar100_full_tacs_c16_e5'],['Top-K, K=2','cifar100_topk_k2_c4_e5','cifar100_topk_k2_c16_e5']];
+$('#c16tbl').innerHTML='<thead><tr><th>Mode</th><th class="n">C = 4</th><th class="n">C = 16</th><th class="n">Chênh lệch</th></tr></thead><tbody>'+pairs.map(([n,a,b])=>{const d=(T(b)-T(a))*100;return `<tr><td>${n}</td><td class="n">${pct(T(a))}</td><td class="n">${pct(T(b))}</td><td class="n ${d<0?'neg':'pos'}">${d>0?'+':''}${fmt(d,2)}</td></tr>`}).join('')+'</tbody>';
+
+/* nav: current section */
+const links=[...document.querySelectorAll('#tabs a')];
+const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting)links.forEach(a=>a.setAttribute('aria-current',a.getAttribute('href')==='#'+e.target.id))}),{rootMargin:'-30% 0px -60% 0px'});
+document.querySelectorAll('main section').forEach(s=>io.observe(s));
+})();
+</script>
+</body>
+</html>

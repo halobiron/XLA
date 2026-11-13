@@ -85,3 +85,20 @@ For E6/E7, set `topk.k: 2` or `topk.k: 4` in the config before using
 After runs finish, aggregate them with `python -m tacsx.summarize --outputs outputs`.
 
 The source tree already defines reusable interfaces and tests. The Coding Agent should complete DINOv3 integration and the training/evaluation pipeline rather than replacing the project with a different framework.
+
+## Demo trực quan (offline)
+
+```powershell
+python scripts/build_demo.py      # nướng outputs/ thành demo/data.js
+start demo/index.html             # mở bằng double-click, không cần server
+```
+
+Để dùng thêm tab **Thử nhận diện** (tải ảnh lên, chạy 4 checkpoint thật trên CPU):
+
+```powershell
+$env:PYTHONPATH="src"; python -m tacsx.serve --port 8765   # rồi mở http://127.0.0.1:8765
+```
+
+Trang bằng tiếng Việt: kết luận và cơ chế, so sánh các mode, truy hồi context
+trên 12 query test, ablation (K, ngưỡng adaptive, C=16) và giao thức. Mọi số liệu
+đọc từ `outputs/`; không chạy suy luận mô hình.
