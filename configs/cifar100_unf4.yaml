@@ -1,0 +1,60 @@
+# Partial fine-tuning: last 4 DINOv3 blocks (+ final norm) train at lr_backbone.
+# Requires trainer_version 2 (per-group LR + cosine). Compare ONLY with runs from this
+# same config, including a no_context run: the old frozen 82.79% is not the right baseline here.
+experiment:
+  name: cifar100_unf4
+  seed: 42
+  mode: full_tacs
+  deviations:
+  - candidates_per_query 4 instead of 16
+  - 5 epochs instead of 30
+  - batch size 32 instead of 16
+  - last 4 backbone blocks unfrozen (lr_backbone 1e-5), rest frozen
+
+data:
+  dataset: cifar100
+  root: ./data
+  download: false
+  image_size: 224
+  candidate_pool_ratio: 0.20
+  candidates_per_query: 4
+  validation_ratio: 0.10
+  num_workers: 2
+
+backbone:
+  name: dinov3_vits16
+  repo_dir: ./third_party/dinov3
+  weights: ./checkpoints/dinov3_vits16_pretrain_lvd1689m-08c60483.pth
+  freeze: true
+  unfreeze_last_n_blocks: 4
+
+selector:
+  projection: true
+  tau: 0.1
+
+policy:
+  enabled: true
+  lambda_policy: 1.0
+  advantage_eps: 1.0e-6
+
+topk:
+  k: 2
+  adaptive_threshold: 0.90
+
+training:
+  epochs: 5
+  batch_size: 32
+  optimizer: adamw
+  lr_head: 3.0e-4
+  lr_selector: 1.0e-4
+  lr_backbone: 1.0e-5
+  weight_decay: 0.05
+  scheduler: cosine
+  amp: true
+
+evaluation:
+  save_selected_pairs: true
+  attention_visualization: false
+
+output:
+  root: ./outputs
