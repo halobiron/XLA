@@ -113,8 +113,8 @@ class DummyTokenAdapter(nn.Module):
         patches = images.mean(dim=1).reshape(b, 4, 4).repeat(1, 1, 2)
         return TokenBatch(torch.cat((torch.zeros(b, 1, 8), patches), dim=1), (2, 2))
 
-    def forward_blocks(self, tokens, grid_size):
-        assert tokens.shape[1] == 1 + grid_size[0] * grid_size[1]
+    def forward_blocks(self, tokens, grid_size, *, num_images=1):
+        assert tokens.shape[1] == 1 + num_images * grid_size[0] * grid_size[1]
         return tokens
 
 

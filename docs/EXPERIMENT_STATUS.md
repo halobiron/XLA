@@ -1,6 +1,79 @@
 # Trạng thái thí nghiệm TACS-X
 
-Cập nhật lần cuối: 2026-10-20
+Cập nhật lần cuối: 2026-11-14
+
+## Kiểm toán nguyên nhân và bản sửa trainer v3 (2026-11-14)
+
+Toàn bộ **23** `metrics.json` hiện có thiếu `trainer_version`: đây là kết quả
+trainer cũ, không phải kết quả của bản sửa partial-unfreeze/LR ở commit `4968810`
+hay bản sửa v3. Các bảng bên dưới là kết quả lịch sử, không được gán cho trainer mới.
+
+Các lỗi đã xác nhận:
+
+- **Vị trí patch hai ảnh không khớp thứ tự token.** Chuỗi là `[query patches,
+  context patches]`, nhưng RoPE lấy từ grid `H x 2W` ở thứ tự theo hàng. Ví dụ
+  2x2: vị trí đúng phải là `[0,1,4,5,2,3,6,7]`, code cũ gán `[0,1,2,3,4,5,6,7]`.
+  `horizontal` sửa ánh xạ; `legacy` giữ nguyên để đọc checkpoint cũ; `per_image`
+  là ablation tái sử dụng tọa độ gốc từng ảnh. Paper không chỉ rõ RoPE hai ảnh.
+- **Đánh giá sai quy tắc inference.** Gumbel/Policy/Full vẫn lấy mẫu ngẫu nhiên
+  ở validation/test. V3 mặc định argmax; `evaluation.selection: sampled` chỉ
+  dùng cho ablation có chủ đích. Không thể mặc định argmax sẽ tăng accuracy.
+- **Run unf4 cũ không phải fine-tune 4 block.** Đối chiếu checkpoint với trọng số
+  official cho thấy cả 12 block và patch embedding đều thay đổi. Code trainer
+  cũ bỏ qua N khi `freeze:false`, dùng `lr_head=3e-4` cho toàn bộ tham số và không
+  áp dụng scheduler. Commit `4968810` đã sửa, nhưng chưa có artifact run mới.
+- **Adaptive-K bỏ mất ứng viên vượt ngưỡng.** V3 giữ ứng viên đầu tiên đưa tổng
+  xác suất tới ngưỡng. Kết quả adaptive cũ không mô tả đúng quy tắc coverage này.
+- **DINO baseline không chạy được cùng protocol fine-tune.** Cache cũ yêu cầu
+  task backbone đóng băng. V3 dùng retriever riêng đóng băng khi task backbone
+  train được, để query/candidate retrieval luôn cùng không gian embedding.
+- **Chế độ train tắt cả module không có tham số.** V3 chỉ đặt toàn bộ adapter
+  đóng băng vào eval, không tắt RoPE augmentation/dropout của backbone train được.
+
+Đối chứng chỉ đọc trên **64 ảnh validation**, không đọc tập test, không huấn luyện:
+
+| Probe, cùng head No-Context và trọng số official | Accuracy | Cosine với query-only |
+|---|---:|---:|
+| Query-only | 79.69% | 1.000 |
+| Query + bản sao query, layout legacy | 65.63% | 0.718 |
+| Query + bản sao query, layout horizontal sửa thứ tự | 78.13% | 0.824 |
+| Query + context ngẫu nhiên, legacy | 37.50% | 0.587 |
+| Query + cùng context ngẫu nhiên, horizontal | 42.19% | 0.661 |
+
+Nhánh query-only qua adapter khớp official `forward_features` với max absolute
+error **0.0**. Backbone các checkpoint No-Context, Random, Full và Top-K K4 đều
+khớp trọng số pretrained, xác nhận chúng hoàn toàn đóng băng. Sửa vị trí cải thiện
+đặc trưng trong đối chứng này nhưng chưa loại bỏ tác hại của context ngẫu nhiên.
+Đây là probe với head cũ trên đầu vào thay đổi, **không phải accuracy của mô hình
+đã train lại**, và không đủ để phân bổ chính xác toàn bộ khoảng cách 38 điểm.
+
+Kết luận: lỗi vị trí đã được chứng minh có ảnh hưởng; inference và trainer cũ
+cũng sai protocol. Đóng băng backbone khi thay đổi đầu vào hai ảnh là giới hạn
+quan trọng cần kiểm chứng bằng retraining, chưa phải tác động nhân quả đã định lượng.
+Paper classification fine-tune toàn bộ mô hình; 5 epoch, 224px, partial fine-tune
+và C=4 vẫn là mini reproduction, phải công bố sai khác.
+
+Cách chạy đối chứng tiếp theo: dùng `configs/cifar100_unf4.yaml`, tên run mới
+v3, trước hết No-Context và Random, sau đó DINO-similarity và Full. Dùng cùng
+protocol và kiểm tra validation trước khi quyết định mở rộng; không tinh chỉnh
+theo test. Chưa có kết quả nào chứng minh v3 vượt No-Context.
+
+Chi tiết máy đọc được: `outputs/diagnostics/fidelity.json`. Tái chạy bằng:
+
+```powershell
+.venv\Scripts\python.exe scripts/diagnose_fidelity.py --samples 64
+```
+
+V3 cũng dùng cùng action cho task/reward/policy để reward trong metadata mô tả
+đúng context đã lưu, tái sử dụng loss đã detach, tránh forward selector lặp, và
+tách generator DataLoader khỏi RNG của model. Dùng chung action là lựa chọn
+triển khai; paper mô tả hai đường tối ưu nhưng không bắt buộc cùng lần lấy mẫu.
+
+Kiểm chứng bản sửa: **28 tests pass**, dùng dummy encoders, không tải model.
+Smoke-test riêng với DINOv3 official xác nhận gradient qua Gumbel hữu hạn và
+đầu ra paired legacy khớp code trước sửa (max absolute error 0.0).
+Head phân loại được khởi tạo cùng seed giữa baseline và learned modes; thứ tự
+DataLoader không bị thay đổi bởi RNG của selector hay số lần lấy mẫu policy.
 
 ## Protocol và phạm vi kết quả
 
@@ -17,7 +90,7 @@ cùng ngân sách và protocol.
 
 ## Kết quả có artifact trong `outputs/`
 
-`outputs/` hiện có **24 run**, chia thành ba nhóm. Mọi run dùng cùng protocol
+`outputs/` hiện có **23 run**, chia thành ba nhóm. Mọi run dùng cùng protocol
 (5 epoch, batch 32, DINOv3 ViT-S/16 đóng băng trừ khi ghi chú khác); các khác biệt
 nằm ở cột Cấu hình. Số liệu lấy từ `outputs/summary.csv`.
 
@@ -48,7 +121,7 @@ nằm ở cột Cấu hình. Số liệu lấy từ `outputs/summary.csv`.
 
 | Run | Cấu hình khác | Test acc | Best val acc | Test loss |
 |---|---|---:|---:|---:|
-| `cifar100_no_context_c4_e5_unf4` | `no_context`, mở khóa 4 block cuối của backbone (`freeze: false`, `unfreeze_last_n_blocks: 4`) | 48.63% | 48.00% | 1.9080 |
+| `cifar100_no_context_c4_e5_unf4` | `no_context`, cấu hình ghi 4 block nhưng checkpoint thực tế thay đổi cả 12 block do lỗi trainer cũ | 48.63% | 48.00% | 1.9080 |
 | `cifar100_no_context_c4_e5_s1` | seed 1 | 82.96% | 82.74% | 0.6294 |
 | `cifar100_dino_sim_c4_e5_s1` | seed 1 | 49.96% | 49.74% | 1.9881 |
 | `cifar100_full_tacs_c4_e5_s1` | seed 1 | 45.28% | 45.20% | 2.1946 |
@@ -140,7 +213,7 @@ cần được xác nhận qua ablation ngưỡng trước khi kết luận adap
 
 Không còn bước chạy hoặc tổng hợp nào bắt buộc cho đợt thí nghiệm hiện tại.
 `outputs/summary.csv`, `outputs/summary.json` và `outputs/ablation_table.md`
-chứa đủ 24 run có artifact trong `outputs/` (xem ba nhóm A/B/C ở trên).
+chứa đủ 23 run có artifact trong `outputs/` (xem ba nhóm A/B/C ở trên).
 
 Các số liệu trong bảng kết quả của tài liệu này khớp với `metrics.json` của
 từng run và với các file summary đã cập nhật. Ablation `K` (2/3/4), ablation threshold (0.5/0.7/0.9), `C=16` và seed 1 cho

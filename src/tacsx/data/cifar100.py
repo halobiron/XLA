@@ -66,17 +66,19 @@ def make_cifar100_loaders(root: str, image_size: int, pool_ratio: float, candida
     # spurious exclusion from the training-derived candidate pool.
     test_ids = list(range(len(train_eval), len(train_eval) + len(test)))
     kwargs = dict(batch_size=batch_size, num_workers=num_workers, pin_memory=True)
+    def loader(dataset, shuffle, offset):
+        # Model construction / policy sampling must not change the data order.
+        generator = torch.Generator().manual_seed(seed + offset)
+        return DataLoader(dataset, shuffle=shuffle, generator=generator, **kwargs)
     if not include_context:
         train = CIFAR100ContextDataset(train_base, include_context=False, query_ids=train_ids)
         valid = CIFAR100ContextDataset(val_base, include_context=False, query_ids=val_ids)
         test_set = CIFAR100ContextDataset(test, include_context=False, query_ids=test_ids)
-        return (DataLoader(train, shuffle=True, **kwargs), DataLoader(valid, shuffle=False, **kwargs),
-                DataLoader(test_set, shuffle=False, **kwargs), None)
+        return (loader(train, True, 0), loader(valid, False, 1), loader(test_set, False, 2), None)
 
     pool_ids = train_ids[:max(2, int(len(train_ids) * pool_ratio))]
     pool = FixedCandidatePool([PoolItem(i, int(train_eval.targets[i])) for i in pool_ids], seed)
     train = CIFAR100ContextDataset(train_base, train_eval, pool, candidates_per_query, seed, query_ids=train_ids, return_candidate_images=return_candidate_images)
     valid = CIFAR100ContextDataset(val_base, train_eval, pool, candidates_per_query, seed + 1, query_ids=val_ids, return_candidate_images=return_candidate_images)
     test_set = CIFAR100ContextDataset(test, train_eval, pool, candidates_per_query, seed + 2, query_ids=test_ids, return_candidate_images=return_candidate_images)
-    return (DataLoader(train, shuffle=True, **kwargs), DataLoader(valid, shuffle=False, **kwargs),
-            DataLoader(test_set, shuffle=False, **kwargs), pool)
+    return (loader(train, True, 0), loader(valid, False, 1), loader(test_set, False, 2), pool)

@@ -6,15 +6,18 @@ import torch.nn.functional as F
 class DINOEmbeddingCache:
     """Fixed-pool embeddings for the frozen DINO-similarity baseline."""
 
-    def __init__(self, candidate_ids: torch.Tensor, embeddings: torch.Tensor):
+    def __init__(self, candidate_ids: torch.Tensor, embeddings: torch.Tensor, query_encoder=None):
         self.candidate_ids = candidate_ids
         self.embeddings = embeddings
+        self.query_encoder = query_encoder
 
+    @torch.no_grad()
     def scores(self, encoder, query: torch.Tensor, candidate_ids: torch.Tensor) -> torch.Tensor:
         positions = torch.searchsorted(self.candidate_ids, candidate_ids.to(query.device))
         if (positions >= self.candidate_ids.numel()).any() or not torch.equal(self.candidate_ids[positions], candidate_ids.to(query.device)):
             raise KeyError("candidate ID missing from fixed DINO embedding cache")
-        q = F.normalize(encoder.encode_global(query), dim=-1)
+        retriever = self.query_encoder if self.query_encoder is not None else encoder
+        q = F.normalize(retriever.encode_global(query), dim=-1)
         c = self.embeddings[positions]
         return torch.einsum("bd,bnd->bn", q, c)
 

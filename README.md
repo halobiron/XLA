@@ -4,6 +4,25 @@ Starter pack for reproducing and extending **Task-Aligned Context Selection (TAC
 
 > Jingyu Guo et al., *Learning What Helps: Task-Aligned Context Selection for Vision Tasks*, CVPR 2026.
 
+The saved 23 runs use the legacy trainer. They do not validate the corrected
+partial fine-tuning, token positions or argmax evaluation. See
+[`docs/EXPERIMENT_STATUS.md`](docs/EXPERIMENT_STATUS.md) for the validation-only
+diagnosis and measured limitations. New runs record `trainer_version: 3`.
+
+For a matched, compute-limited rerun, start with:
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m tacsx.cli --config configs/cifar100_unf4.yaml --mode no_context --name v3_unf4_no_context_s42
+python -m tacsx.cli --config configs/cifar100_unf4.yaml --mode random_context --name v3_unf4_random_s42
+python -m tacsx.cli --config configs/cifar100_unf4.yaml --mode dino_similarity --name v3_unf4_dino_s42
+python -m tacsx.cli --config configs/cifar100_unf4.yaml --mode full_tacs --name v3_unf4_full_s42
+```
+
+Use a GPU for training. These are 5-epoch partial-fine-tuning diagnostics, not
+paper-equivalent runs or a promise to exceed the frozen No-Context baseline.
+Old checkpoints without `backbone.pair_rope_layout` keep the legacy layout.
+
 ## Goal
 
 Build a compact, defensible reproduction for image classification, then add one small extension:

@@ -13,6 +13,7 @@ import yaml
 from torch.utils.data import DataLoader, Subset
 
 from tacsx.models.baselines import DINOEmbeddingCache, dino_similarity_scores
+from tacsx.models.dinov3_adapter import DINOv3Adapter
 
 
 def set_seed(seed: int):
@@ -45,7 +46,7 @@ def cache_dino_candidate_embeddings(encoder, context_dataset, device, batch_size
         if step == 1 or step == len(loader) or step % max(1, len(loader) // 10) == 0:
             print(f"  caching DINO candidates {step}/{len(loader)}", flush=True)
     encoder.train(was_training)
-    return DINOEmbeddingCache(torch.tensor(ids, device=device), torch.cat(chunks, dim=0))
+    return DINOEmbeddingCache(torch.tensor(ids, device=device), torch.cat(chunks, dim=0), query_encoder=encoder)
 
 
 def execute(model, mode, batch, device, dino_cache=None, candidate_dataset=None):
@@ -68,13 +69,18 @@ def execute(model, mode, batch, device, dino_cache=None, candidate_dataset=None)
     return model.run_mode(mode, query, candidates, labels, scores), query, candidates, labels
 
 
-def train_epoch(model, loader, optimizer, mode, device, lambda_policy, scaler=None, show_progress=False, dino_cache=None):
-    model.train(); total_loss = total_correct = total = 0
-    # Cached DINO embeddings require the frozen feature extractor to remain in
-    # evaluation mode (and this also avoids stochastic frozen features).
+def _set_training_mode(model):
+    model.train()
+    # Freeze entire frozen encoders, not EVERY parameterless child. The latter
+    # also disabled RoPE augmentation/dropout inside trainable backbones.
     for module in model.modules():
-        if module is not model and not any(p.requires_grad for p in module.parameters(recurse=True)):
+        if isinstance(module, DINOv3Adapter) and not any(p.requires_grad for p in module.parameters()):
             module.eval()
+
+
+def train_epoch(model, loader, optimizer, mode, device, lambda_policy, scaler=None, show_progress=False, dino_cache=None):
+    _set_training_mode(model)
+    total_loss = total_correct = total = 0
     log_every = max(1, len(loader) // 10)
     for step, batch in enumerate(loader, start=1):
         optimizer.zero_grad(set_to_none=True)

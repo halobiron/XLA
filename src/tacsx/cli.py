@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from pathlib import Path
 import yaml
 import torch
@@ -63,18 +64,20 @@ def build_model(cfg, allow_random_backbone: bool, include_selector: bool = True)
     if not weights and not allow_random_backbone:
         raise ValueError("DINOv3 weights are required. Set backbone.weights via official access, or explicitly pass --allow-random-backbone for a smoke test.")
     kwargs = {"weights": weights} if weights else {"pretrained": False}
+    # Missing key means an old checkpoint: preserve its original representation.
+    kwargs["pair_rope_layout"] = back.get("pair_rope_layout", "legacy")
     task_adapter = DINOv3Adapter(back["repo_dir"], **kwargs)
     _freeze(task_adapter, back.get("freeze", False), int(back.get("unfreeze_last_n_blocks", 0)))
+    # Extra selector initialization must not change the baseline's head seed.
+    task = DualInputViT(task_adapter, 100)
     if not include_selector:
-        task = DualInputViT(task_adapter, 100)
         return TACSClassifier(None, task, tau=float(cfg["selector"].get("tau", .1)), lambda_policy=float(cfg["policy"].get("lambda_policy", 1.0)))
 
     selector_adapter = DINOv3Adapter(back["repo_dir"], **kwargs)
     _freeze(selector_adapter, back.get("freeze", False), int(back.get("unfreeze_last_n_blocks", 0)))
-    task = DualInputViT(task_adapter, 100)
     selector = TACSSelector(selector_adapter, projection=cfg["selector"].get("projection", True))
     topk = cfg.get("topk", {})
-    return TACSClassifier(selector, task, tau=float(cfg["selector"].get("tau", .1)), lambda_policy=float(cfg["policy"].get("lambda_policy", 1.0)), topk_k=int(topk.get("k", 2)), adaptive_threshold=float(topk.get("adaptive_threshold", .9)))
+    return TACSClassifier(selector, task, tau=float(cfg["selector"].get("tau", .1)), lambda_policy=float(cfg["policy"].get("lambda_policy", 1.0)), topk_k=int(topk.get("k", 2)), adaptive_threshold=float(topk.get("adaptive_threshold", .9)), eval_selection=cfg.get("evaluation", {}).get("selection", "argmax"))
 
 
 def main(argv=None):
@@ -90,6 +93,8 @@ def main(argv=None):
     p.add_argument("--download-data", action="store_true", help="explicitly download CIFAR-100 when it is not mounted locally")
     p.add_argument("--allow-random-backbone", action="store_true", help="only for smoke tests; logs a fidelity deviation")
     p.add_argument("--topk-k", type=int, help="override topk.k for topk_tacs")
+    p.add_argument("--pair-rope-layout", choices=("legacy", "horizontal", "per_image"),
+                   help="explicit multi-image position layout; old checkpoints use legacy")
     args = p.parse_args(argv)
     cfg = yaml.safe_load(Path(args.config).read_text())
     if args.mode: cfg["experiment"]["mode"] = args.mode
@@ -119,6 +124,10 @@ def main(argv=None):
         if args.topk_k < 1:
             p.error("--topk-k must be at least 1")
         cfg.setdefault("topk", {})["k"] = args.topk_k
+    if args.pair_rope_layout is not None:
+        cfg["backbone"]["pair_rope_layout"] = args.pair_rope_layout
+    cfg["backbone"].setdefault("pair_rope_layout", "legacy")
+    cfg.setdefault("evaluation", {}).setdefault("selection", "argmax")
     mode = cfg["experiment"]["mode"]
     include_context = mode != "no_context"
     include_selector = mode not in {"no_context", "random_context", "dino_similarity"}
@@ -133,10 +142,13 @@ def main(argv=None):
     model = build_model(cfg, args.allow_random_backbone, include_selector=include_selector).to(device)
     dino_cache = None
     if cache_dino:
-        if any(p.requires_grad for p in model.task_model.backbone.parameters()):
-            raise ValueError("DINO embedding cache requires a fully frozen task backbone")
+        retriever = model.task_model.backbone
+        if any(p.requires_grad for p in retriever.parameters()):
+            # Retrieval stays frozen while the downstream baseline fine-tunes,
+            # enabling a fair comparison against the other unfrozen modes.
+            retriever = copy.deepcopy(retriever).eval().requires_grad_(False)
         print("Caching fixed-pool DINO embeddings once; subsequent epochs reuse them.", flush=True)
-        dino_cache = cache_dino_candidate_embeddings(model.task_model.backbone, train_loader.dataset, device)
+        dino_cache = cache_dino_candidate_embeddings(retriever, train_loader.dataset, device)
     groups = param_groups(model, cfg["training"])
     for g in groups:
         print(f"param group {g['name']}: {sum(p.numel() for p in g['params']):,} params, lr={g['lr']:g}", flush=True)
@@ -161,9 +173,12 @@ def main(argv=None):
     model.load_state_dict(best_state)
     metrics, pairs = evaluate(model, test_loader, mode, device, collect_pairs=True, dino_cache=dino_cache)
     metrics.update({"method": mode, "seed": cfg["experiment"]["seed"], "best_val_acc": best, "test_acc": metrics["accuracy"], "random_backbone": args.allow_random_backbone,
-                    # v2: per-group learning rates, cosine schedule, correct partial unfreezing.
-                    # Runs without this key used one lr for everything and no scheduler; do not mix them.
-                    "trainer_version": 2})
+                    "trainer_version": 3,
+                    "pair_rope_layout": cfg["backbone"]["pair_rope_layout"],
+                    "eval_selection": cfg["evaluation"]["selection"],
+                    "policy_action": "shared_with_task",
+                    "adaptive_rule": "include_threshold_crossing",
+                    "trainable_parameters": {g["name"]: sum(p.numel() for p in g["params"]) for g in groups}})
     out = Path(cfg["output"]["root"]) / cfg["experiment"]["name"]
     save_run(out, cfg, history, metrics, model, pairs)
     print(yaml.safe_dump(metrics, sort_keys=False))
