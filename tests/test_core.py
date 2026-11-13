@@ -19,6 +19,46 @@ class DummyEncoder(nn.Module):
         return reps[:, :8]
 
 
+class _FakeViT(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.blocks = nn.ModuleList([nn.Linear(4, 4) for _ in range(6)])
+        self.norm = nn.LayerNorm(4)
+        self.patch_embed = nn.Linear(4, 4)
+
+
+class _FakeAdapter(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.model = _FakeViT()
+
+
+def test_partial_unfreeze_trains_only_last_blocks():
+    from tacsx.cli import _freeze
+    for freeze in (True, False):  # freeze:false used to fine-tune everything and ignore N
+        a = _FakeAdapter()
+        _freeze(a, freeze, 2)
+        trainable = [i for i, b in enumerate(a.model.blocks) if all(p.requires_grad for p in b.parameters())]
+        assert trainable == [4, 5]
+        assert not any(p.requires_grad for p in a.model.patch_embed.parameters())
+        assert all(p.requires_grad for p in a.model.norm.parameters())
+
+
+def test_param_groups_use_separate_learning_rates():
+    from tacsx.cli import param_groups
+
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.selector = nn.Module(); self.selector.encoder = nn.Linear(2, 2); self.selector.projector = nn.Linear(2, 2)
+            self.task_model = nn.Module(); self.task_model.backbone = nn.Linear(2, 2); self.task_model.head = nn.Linear(2, 2)
+
+    groups = {g["name"]: g for g in param_groups(M(), {"lr_head": 3e-4, "lr_selector": 1e-4, "lr_backbone": 1e-5})}
+    assert groups["backbone"]["lr"] == 1e-5 and len(groups["backbone"]["params"]) == 4
+    assert groups["selector"]["lr"] == 1e-4 and len(groups["selector"]["params"]) == 2
+    assert groups["head"]["lr"] == 3e-4 and len(groups["head"]["params"]) == 2
+
+
 def test_selector_shape():
     selector = TACSSelector(DummyEncoder(), projection=False)
     q = torch.randn(3, 3, 16, 16)
