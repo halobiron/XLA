@@ -12,6 +12,7 @@ import hashlib
 import io
 import json
 from itertools import chain
+from pathlib import Path
 import random
 import time
 import zipfile
@@ -60,6 +61,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--stage", choices=("register", "validation", "test"), default="register")
     p.add_argument("--run", default="outputs/tacs_shortlist_fullft_clean_v3")
+    p.add_argument("--data-root", default="data", help="directory containing cifar-100-python/train and test")
+    p.add_argument("--base-archive", default="outputs.zip", help="zip containing the common No-Context initialization")
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--diagnostic-samples", type=int, default=0,
                    help="validation-only interim probe; never opens test or establishes completion")
@@ -67,6 +70,9 @@ def main():
     if args.diagnostic_samples and args.stage != "validation":
         p.error("Interim diagnostics are validation-only")
     run = ROOT / args.run
+    data_root = Path(args.data_root)
+    if not data_root.is_absolute():
+        data_root = ROOT / data_root
     output = run / ("interim_diagnostics" if args.diagnostic_samples else "evaluation")
     output.mkdir(parents=True, exist_ok=True)
     plan = json.loads((run / "plan.json").read_text())
@@ -130,7 +136,7 @@ def main():
     lock_path = output / "checkpoint_lock.json"
     lock = {"checkpoint_sha256": hashes, "evaluation_protocol_sha256": fingerprints(path),
             "supplemental_protocol_sha256": fingerprints(supplemental_path),
-            "training_data_sha256": fingerprints(ROOT / "data/cifar-100-python/train"), "training_plan": plan}
+            "training_data_sha256": fingerprints(data_root / "cifar-100-python/train"), "training_plan": plan}
     if lock_path.exists() and json.loads(lock_path.read_text()) != lock:
         raise ValueError("Checkpoint/evaluation lock changed")
     json_save(lock, lock_path)
@@ -142,14 +148,14 @@ def main():
         val = json.loads((output / "validation_result.json").read_text())
         if not val["positive_familywise_metrics"] or val["lock"] != lock:
             raise ValueError("No locked positive validation evidence")
-    source = TrainingImages(ROOT / "data")
+    source = TrainingImages(data_root)
     indices = list(range(50000))
     random.Random(42).shuffle(indices)
     query_source = source
     query_ids, local_ids = indices[:5000], indices[:5000]
     if args.stage == "test":
         from evaluate_native_residual_test import TestImages
-        query_source = TestImages(ROOT / "data")
+        query_source = TestImages(data_root)
         query_ids, local_ids = list(range(50000, 60000)), list(range(10000))
         identity_ids = pixel_identity_ids(chain(source.images, query_source.images))
         query_ids, excluded = heldout_without_identity_overlap(list(range(50000)), query_ids, identity_ids)
@@ -161,7 +167,10 @@ def main():
     if args.diagnostic_samples:
         query_ids = query_ids[:args.diagnostic_samples]
         local_ids = local_ids[:args.diagnostic_samples]
-    archive = zipfile.ZipFile(ROOT / "outputs.zip")
+    archive_path = Path(args.base_archive)
+    if not archive_path.is_absolute():
+        archive_path = ROOT / archive_path
+    archive = zipfile.ZipFile(archive_path)
     models = {}
     for mode in checkpoints:
         models[mode] = build_task(archive, mode, device, plan["task_unfreeze_last_blocks"],
@@ -186,7 +195,9 @@ def main():
         from tacsx.models.dinov3_adapter import DINOv3Adapter
         _, _, base_cfg = load_model(archive, "no_context", device)
         proposal_encoder = DINOv3Adapter(base_cfg["backbone"]["repo_dir"], weights=base_cfg["backbone"]["weights"]).to(device).eval().requires_grad_(False)
-        pixel_cache_path = ROOT / "outputs/tacs_shortlist_fullft_v2/pool_pixels_fp16.pt"
+        pixel_cache_path = run / "pool_pixels_fp16.pt"
+        if not pixel_cache_path.exists():
+            pixel_cache_path = ROOT / "outputs/tacs_shortlist_fullft_v2/pool_pixels_fp16.pt"
         pixel_cache = torch.load(pixel_cache_path, weights_only=False)
         if not torch.equal(pixel_cache["pool_ids"], pool_ids.cpu()):
             raise ValueError("Shared-selector inference pixel pool mismatch")
