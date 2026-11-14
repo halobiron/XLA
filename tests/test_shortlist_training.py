@@ -70,3 +70,17 @@ def test_cached_candidate_features_preserve_scores_and_hybrid_gradient():
     assert grad is not None and torch.isfinite(grad).all() and grad.abs().sum() > 0
     assert out.reward is not None and not out.reward.requires_grad
     assert all(p.grad is None for p in full.selector.encoder.parameters())
+
+
+def test_shared_selector_reuses_the_trainable_task_vit_and_backpropagates_query_scores():
+    base = TACSClassifier(None, Task()).eval().requires_grad_(False)
+    cfg = {"backbone": {"repo_dir": "unused", "weights": "unused"}}
+    with patch.object(runner, "load_model", side_effect=lambda *args: (copy.deepcopy(base), "unused", cfg)), patch.object(runner, "DINOv3Adapter", Encoder):
+        full = runner.build_task(None, "full_tacs", "cpu", shared_selector_backbone=True)
+    assert full.selector.encoder is full.task_model.backbone
+    assert all(p.requires_grad for p in full.selector.encoder.parameters())
+    query, candidates = torch.randn(4, 3, 4, 4), torch.randn(4, 3, 3, 4, 4)
+    scores = runner.learned_scores(full, query, torch.empty(4, 3, 3), 1 / .07, candidates)
+    scores.square().mean().backward()
+    grads = [p.grad for p in full.task_model.backbone.parameters()]
+    assert any(g is not None and torch.isfinite(g).all() and g.abs().sum() > 0 for g in grads)
