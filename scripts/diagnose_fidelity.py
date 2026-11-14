@@ -80,7 +80,7 @@ def main():
     p.add_argument("--samples", type=int, default=64)
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--threads", type=int, default=4)
-    p.add_argument("--device", default="cpu")
+    p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--output", default="outputs/diagnostics/fidelity.json")
     args = p.parse_args()
     if args.samples < 1 or args.samples > 5000 or args.batch_size < 1:

@@ -4,6 +4,13 @@
 
 Implement **TACS-X** faithfully enough to reproduce the qualitative behavior and ablation logic of TACS, while keeping the codebase small, testable, and practical on limited compute.
 
+## Local execution
+
+- This Windows workstation has an NVIDIA RTX 5060 Ti with 16 GB VRAM.
+- Use `.venv-gpu/Scripts/python.exe` for model diagnostics and training. Its CUDA build has been verified with real forward/backward operations.
+- The original `.venv` is CPU-only. Do not infer that hardware has no GPU from `torch.cuda.is_available()` in that environment; check `nvidia-smi` and the interpreter/build first.
+- Dummy-encoder unit tests may stay on CPU. Keep original experiment checkpoints unchanged when running diagnostics.
+
 ## Non-negotiable constraints
 
 - Use PyTorch.
