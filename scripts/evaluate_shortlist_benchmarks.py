@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import io
 import json
 from itertools import chain
 import random
@@ -19,10 +21,10 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from probe_v3_context import ROOT, TrainingImages
+from probe_v3_context import ROOT, TrainingImages, load_model
 from probe_tacs_robustness import CONDITIONS, corrupt, paired_ci
 from search_native_context import atomic_save, json_save
-from train_tacs_shortlist import build_task, fingerprints
+from train_tacs_shortlist import build_task, encode_candidate_globals, fingerprints
 from tacsx.models.retrieval_fusion import retrieve
 from tacsx.data.identity import pixel_identity_ids, heldout_without_identity_overlap
 
@@ -59,9 +61,13 @@ def main():
     p.add_argument("--stage", choices=("register", "validation", "test"), default="register")
     p.add_argument("--run", default="outputs/tacs_shortlist_fullft_clean_v3")
     p.add_argument("--batch-size", type=int, default=64)
+    p.add_argument("--diagnostic-samples", type=int, default=0,
+                   help="validation-only interim probe; never opens test or establishes completion")
     args = p.parse_args()
+    if args.diagnostic_samples and args.stage != "validation":
+        p.error("Interim diagnostics are validation-only")
     run = ROOT / args.run
-    output = run / "evaluation"
+    output = run / ("interim_diagnostics" if args.diagnostic_samples else "evaluation")
     output.mkdir(parents=True, exist_ok=True)
     plan = json.loads((run / "plan.json").read_text())
     protocol = {"training_plan_sha256": fingerprints(run / "plan.json"),
@@ -78,6 +84,9 @@ def main():
                 "checkpoint_selection": "best clean validation accuracy, clean NLL tie-break, independently for each arm",
                 "test_gate": "training complete for both arms, at least one positive family-controlled validation metric; lock checkpoint hashes before test",
                 "report": "all metrics/conditions including negative differences, one training seed; query CIs do not estimate seed variation"}
+    if args.diagnostic_samples:
+        protocol["diagnostic_only"] = True
+        protocol["diagnostic_samples"] = args.diagnostic_samples
     path = output / "prospective_protocol.json"
     if path.exists() and json.loads(path.read_text()) != protocol:
         raise ValueError("Changed evaluation protocol")
@@ -110,14 +119,18 @@ def main():
     torch.backends.cudnn.allow_tf32 = False
     device = torch.device("cuda")
     checkpoints = {mode: run / mode / "checkpoint_best.pt" for mode in protocol["models"]}
-    hashes = {mode: fingerprints(path) for mode, path in checkpoints.items()}
+    contents = {mode: path.read_bytes() for mode, path in checkpoints.items()}
+    hashes = {mode: hashlib.sha256(value).hexdigest() for mode, value in contents.items()}
+    counts = {}
     for mode in checkpoints:
         history = json.loads((run / mode / "history.json").read_text())
-        if len(history) != plan["epochs"]:
+        counts[mode] = len(history)
+        if not args.diagnostic_samples and len(history) != plan["epochs"]:
             raise ValueError("Finish the matched training budget before evaluating")
     lock_path = output / "checkpoint_lock.json"
     lock = {"checkpoint_sha256": hashes, "evaluation_protocol_sha256": fingerprints(path),
-            "supplemental_protocol_sha256": fingerprints(supplemental_path), "training_plan": plan}
+            "supplemental_protocol_sha256": fingerprints(supplemental_path),
+            "training_data_sha256": fingerprints(ROOT / "data/cifar-100-python/train"), "training_plan": plan}
     if lock_path.exists() and json.loads(lock_path.read_text()) != lock:
         raise ValueError("Checkpoint/evaluation lock changed")
     json_save(lock, lock_path)
@@ -145,13 +158,19 @@ def main():
         identity_ids = pixel_identity_ids(source.images)
         query_ids, excluded = heldout_without_identity_overlap(indices[5000:], query_ids, identity_ids)
         local_ids = query_ids
+    if args.diagnostic_samples:
+        query_ids = query_ids[:args.diagnostic_samples]
+        local_ids = local_ids[:args.diagnostic_samples]
     archive = zipfile.ZipFile(ROOT / "outputs.zip")
     models = {}
     for mode in checkpoints:
-        models[mode] = build_task(archive, mode, device, plan["task_unfreeze_last_blocks"]).eval().requires_grad_(False)
-        saved = torch.load(checkpoints[mode], map_location=device, weights_only=False)
+        models[mode] = build_task(archive, mode, device, plan["task_unfreeze_last_blocks"],
+                                  shared_selector_backbone=plan.get("shared_selector_backbone", False) and mode == "full_tacs").eval().requires_grad_(False)
+        saved = torch.load(io.BytesIO(contents[mode]), map_location="cpu", weights_only=False)
         if saved["plan"] != plan:
             raise ValueError("Training/checkpoint mismatch")
+        if args.diagnostic_samples and saved["best"]["epoch"] > min(counts.values()):
+            raise ValueError("Interim best checkpoint exceeds the common completed budget")
         models[mode].load_state_dict(saved["model"])
     full = models["full_tacs"]
     cache = torch.load(run / "train_shortlist.pt", weights_only=False)
@@ -159,6 +178,23 @@ def main():
     if not torch.equal(cache["identity_ids"], identity_ids[:50000]):
         raise ValueError("Source identities changed")
     pool_identity = identity_ids[pool_ids.cpu()].to(device)
+    pool_pixels = None
+    proposal_encoder = full.selector.encoder
+    if plan.get("shared_selector_backbone", False):
+        # Keep candidate proposal retrieval fixed at official pretrained DINO;
+        # the learned selector itself uses the current shared task/selector ViT.
+        from tacsx.models.dinov3_adapter import DINOv3Adapter
+        _, _, base_cfg = load_model(archive, "no_context", device)
+        proposal_encoder = DINOv3Adapter(base_cfg["backbone"]["repo_dir"], weights=base_cfg["backbone"]["weights"]).to(device).eval().requires_grad_(False)
+        pixel_cache_path = ROOT / "outputs/tacs_shortlist_fullft_v2/pool_pixels_fp16.pt"
+        pixel_cache = torch.load(pixel_cache_path, weights_only=False)
+        if not torch.equal(pixel_cache["pool_ids"], pool_ids.cpu()):
+            raise ValueError("Shared-selector inference pixel pool mismatch")
+        pool_pixels = pixel_cache["pixels"].to(device)
+        del pixel_cache
+        # The trained shared ViT is fixed at evaluation time: encode each pool
+        # image once, then gather its representation for every query shortlist.
+        live_pool_features = encode_candidate_globals(full.selector.encoder, pool_pixels.unsqueeze(0))[0]
     output_logits = {mode: [[] for _ in CONDITIONS] for mode in models}
     labels, selected = [], []
     progress = output / f"{args.stage}_progress.pt"
@@ -176,18 +212,28 @@ def main():
             q = torch.stack([query_source.transform(corrupt(query_source.images[local], name, severity, qid))
                              for local, qid in zip(batch_local, batch_ids)]).to(device)
             # Official frozen DINO proposal + the trained TACS utility projection.
-            qfeatures = full.selector.encoder.encode_global(q)
+            qfeatures = proposal_encoder.encode_global(q)
             batch_identity = identity_ids[torch.tensor(batch_ids)].to(device)
             _, positions = retrieve(qfeatures, pool, pool_ids, plan["shortlist_k"], torch.tensor(batch_ids, device=device),
                                     batch_identity, pool_identity)
-            qproj = F.normalize(full.selector.projector(qfeatures), dim=-1)
-            cproj = F.normalize(full.selector.projector(pool[positions]), dim=-1)
+            if plan.get("shared_selector_backbone", False):
+                candidate_features = live_pool_features[positions]
+                selector_query = full.selector.encoder.encode_global(q)
+            else:
+                candidate_features = pool[positions]
+                selector_query = qfeatures
+            qproj = F.normalize(full.selector.projector(selector_query), dim=-1)
+            cproj = F.normalize(full.selector.projector(candidate_features), dim=-1)
             scores = torch.einsum("bd,bnd->bn", qproj, cproj) * plan["selector_logit_scale"]
             action = scores.argmax(-1)
-            context_ids = pool_ids[positions[torch.arange(len(q), device=device), action]]
+            chosen_positions = positions[torch.arange(len(q), device=device), action]
+            context_ids = pool_ids[chosen_positions]
             if identity_ids[context_ids.cpu()].eq(batch_identity.cpu()).any():
                 raise ValueError("Self retrieval")
-            c = torch.stack([source[int(i)][0] for i in context_ids.cpu()]).to(device)
+            if pool_pixels is not None:
+                c = pool_pixels[chosen_positions]
+            else:
+                c = torch.stack([source[int(i)][0] for i in context_ids.cpu()]).to(device)
             output_logits["full_tacs"][j].append(full.task_model(q, c).cpu())
             output_logits["no_context"][j].append(models["no_context"].task_model(q, None).cpu())
             batch_selected.append(context_ids.cpu())
@@ -199,7 +245,10 @@ def main():
         print(f"{args.stage}: {done}/{len(query_ids)} queries x9 conditions, {time.perf_counter() - started:.1f}s", flush=True)
     labels = torch.tensor(labels)
     packed = {mode: torch.stack([torch.cat(condition) for condition in values], dim=1) for mode, values in output_logits.items()}
-    result = {"split": args.stage, "count": len(labels), "excluded_duplicate_query_ids": excluded,
+    if not all(torch.isfinite(value).all() for value in packed.values()):
+        raise FloatingPointError("Nonfinite benchmark logits; no result can be claimed")
+    result = {"split": args.stage, "count": len(labels), "diagnostic_only": bool(args.diagnostic_samples),
+              "completed_training_epochs": counts, "excluded_duplicate_query_ids": excluded,
               **summarize(packed, labels), "lock": lock,
               "elapsed_seconds": time.perf_counter() - started}
     atomic_save({"logits": packed, "labels": labels, "query_ids": torch.tensor(query_ids),

@@ -1,12 +1,13 @@
 param(
-    [string]$Run = 'outputs/tacs_shortlist_fullft_clean_v3'
+    [string]$Run = 'outputs/tacs_shortlist_fullft_clean_v3',
+    [string]$TrainingScript = 'train_tacs_shortlist_cpu_state_snapshot.py'
 )
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path $PSScriptRoot -Parent
 Set-Location -LiteralPath $workspace
 $python = Join-Path $workspace '.venv-gpu/Scripts/python.exe'
 $trainingProcesses = @(Get-CimInstance Win32_Process -Filter "name = 'python.exe'" | Where-Object {
-    $_.CommandLine -match 'train_tacs_shortlist_cpu_state_snapshot\.py.*--stage train.*--arms no_context full_tacs'
+    $_.CommandLine -match ([regex]::Escape($TrainingScript) + '.*--stage train.*--arms no_context full_tacs')
 })
 $trainingIds = @($trainingProcesses | ForEach-Object { $_.ProcessId })
 $mainProcesses = @($trainingProcesses | Where-Object { $_.ParentProcessId -in $trainingIds })
@@ -17,8 +18,12 @@ while ($true) {
     $counts = @{}
     foreach ($arm in @('no_context', 'full_tacs')) {
         $historyPath = Join-Path $Run "$arm/history.json"
-        $history = Get-Content -LiteralPath $historyPath -Raw | ConvertFrom-Json
-        $counts[$arm] = $history.Count
+        if (Test-Path -LiteralPath $historyPath) {
+            $history = Get-Content -LiteralPath $historyPath -Raw | ConvertFrom-Json
+            $counts[$arm] = $history.Count
+        } else {
+            $counts[$arm] = 0
+        }
     }
     @{ stage = 'waiting_for_matched_training'; epochs = $counts; training_pid = $trainingProcess.ProcessId } |
         ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $statusPath -Encoding utf8

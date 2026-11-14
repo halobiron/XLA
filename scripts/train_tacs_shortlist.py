@@ -78,9 +78,25 @@ def score(model, query, candidate_features, scale):
     return torch.einsum("bd,bnd->bn", q, candidate_features) * scale
 
 
-def learned_scores(model, query, candidate_features, scale):
+def encode_candidate_globals(encoder, candidate_images, chunk_size=128):
+    """Refresh current candidate embeddings without retaining encoder activations."""
+    b, n, c, h, w = candidate_images.shape
+    flat = candidate_images.reshape(b * n, c, h, w)
+    outputs = []
     with torch.no_grad():
+        for start in range(0, len(flat), chunk_size):
+            outputs.append(encoder.encode_global(flat[start:start + chunk_size]))
+    return torch.cat(outputs).reshape(b, n, -1)
+
+
+def learned_scores(model, query, candidate_features, scale, candidate_images=None):
+    if candidate_images is None:
+        with torch.no_grad():
+            q = model.selector.encoder.encode_global(query)
+    else:
+        # In this arm the selector query path shares the trainable task ViT.
         q = model.selector.encoder.encode_global(query)
+        candidate_features = encode_candidate_globals(model.selector.encoder, candidate_images)
     q = F.normalize(model.selector.projector(q), dim=-1)
     c = F.normalize(model.selector.projector(candidate_features), dim=-1)
     return torch.einsum("bd,bnd->bn", q, c) * scale
@@ -103,7 +119,8 @@ def run_epoch(model, loader, arm, device, pool_features, optimizer=None, scaler=
                 positions = batch["candidate_positions"].to(device)
                 candidates = pool_pixels[positions] if pool_pixels is not None else batch["candidates"].to(device)
                 features = pool_features[positions]
-                scores = learned_scores(model, q, features, scale) if arm == "full_tacs" else score(model, q, features, scale)
+                shared = arm == "full_tacs" and model.selector.encoder is model.task_model.backbone
+                scores = learned_scores(model, q, features, scale, candidates if shared else None) if arm == "full_tacs" else score(model, q, features, scale)
             out = model.run_mode(arm, q, candidates, y, scores)
             loss = out.task_loss + model.lambda_policy * out.policy_loss
         with torch.no_grad():
@@ -147,7 +164,7 @@ def run_epoch(model, loader, arm, device, pool_features, optimizer=None, scaler=
     return result, probs, labels, pairs
 
 
-def build_task(archive, arm, device, last_n=0):
+def build_task(archive, arm, device, last_n=0, shared_selector_backbone=False):
     model, _, cfg = load_model(archive, "no_context", device)
     # Re-enable every downstream parameter before applying the new protocol.
     # The warm-start checkpoint itself used only the last four blocks.
@@ -158,7 +175,10 @@ def build_task(archive, arm, device, last_n=0):
         _freeze(model.task_model.backbone, True, last_n)
     if arm == "no_context":
         return model
-    encoder = DINOv3Adapter(cfg["backbone"]["repo_dir"], weights=cfg["backbone"]["weights"]).to(device).eval().requires_grad_(False)
+    if shared_selector_backbone:
+        encoder = model.task_model.backbone
+    else:
+        encoder = DINOv3Adapter(cfg["backbone"]["repo_dir"], weights=cfg["backbone"]["weights"]).to(device).eval().requires_grad_(False)
     selector = TACSSelector(encoder, projection=False)
     selector.projector = nn.Linear(encoder.embedding_dim, encoder.embedding_dim, bias=False).to(device)
     nn.init.eye_(selector.projector.weight)
@@ -195,10 +215,16 @@ def main():
     p.add_argument("--arms", nargs="+", choices=ARMS, default=list(ARMS))
     p.add_argument("--task-unfreeze-last-blocks", type=int, default=0,
                    help="0: full task fine-tuning, otherwise last N task blocks")
+    p.add_argument("--shortlist-k", type=int, default=16,
+                   help="number of DINO-proposed images scored per query; smaller values are practical mini-reproduction deviations")
     p.add_argument("--prepared-from", help="reuse compatible frozen-encoder shortlists; never reuse trained models")
     p.add_argument("--cached-pixels", action="store_true", help="equivalent FP16 Gumbel pixel contraction, GPU-resident clean pool")
     p.add_argument("--pixel-cache", help="reuse an immutable compatible pixel cache")
+    p.add_argument("--shared-selector-backbone", action="store_true",
+                   help="share the trainable task ViT with the selector; refresh candidate embeddings each step")
     args = p.parse_args()
+    if args.shortlist_k < 2:
+        p.error("--shortlist-k must be at least 2 for categorical selection")
     if not torch.cuda.is_available():
         p.error("CUDA required: .venv-gpu/Scripts/python.exe")
     torch.set_num_threads(4)
@@ -214,17 +240,21 @@ def main():
     plan = {"method": "TACS-X DINO-shortlist, query warm start", "seed": args.seed,
             "epochs": args.epochs, "batch_size": args.batch_size, "lr_backbone": 1e-5,
             "lr_head": 3e-4, "lr_selector": 1e-4, "weight_decay": .05, "tau": .1, "lambda_policy": 1.,
-            "shortlist_k": 16, "selector_logit_scale": 1 / .07, "task_unfreeze_last_blocks": args.task_unfreeze_last_blocks,
+            "shortlist_k": args.shortlist_k, "selector_logit_scale": 1 / .07, "task_unfreeze_last_blocks": args.task_unfreeze_last_blocks,
             "common_task_initialization_crc": archive.getinfo(entry).CRC,
             "official_weights_sha256": fingerprints(ROOT / "checkpoints/dinov3_vits16_pretrain_lvd1689m-08c60483.pth"),
             "candidate_pool": "first 9000 from seed42 shuffled 45000 training split; no labels used",
             "identity_rule": "exclude all pixel-identical candidates, even with different IDs; deduplicate heldout against training and itself",
-            "selector": "frozen official DINO encoder, trainable identity-initialized linear projection, scaled cosine",
+            "selector": ("shared trainable task DINOv3 ViT, trainable identity-initialized linear projection, scaled cosine; candidate embeddings stop-gradient and refreshed each step"
+                         if args.shared_selector_backbone else "frozen official DINO encoder, trainable identity-initialized linear projection, scaled cosine"),
             "downstream": "query/context patch concatenation before transformer, unchanged DINOv3Adapter",
             "training_augmentation": "padded random crop and horizontal flip; deterministic resize for context",
-            "arms": list(ARMS), "candidate_labels_used_for_selection": False,
-            "deviations": ["All task models continue same 5-epoch No-Context checkpoint", "Nearest-16 shortlist rather than 4 uniform candidates", "Frozen selector encoder with trainable linear projection", "Explicit cosine logit scale 1/.07", "224px, batch32, 10 continuation epochs, one seed", "Shortlist uses clean query; selector scores actual augmented query during training"],
+            "arms": list(args.arms), "candidate_labels_used_for_selection": False,
+            "deviations": (["All task models continue same 5-epoch No-Context checkpoint", f"DINO nearest-{args.shortlist_k} shortlist", "Explicit cosine logit scale 1/.07", "224px, batch32, 10 continuation epochs, one seed", "Shortlist uses clean query; selector scores actual augmented query during training"] + ([] if args.shared_selector_backbone else ["Frozen selector encoder with trainable linear projection"])),
             "selection_metric": "validation top1 accuracy, CE tie-break", "test_tuning": False}
+    plan["shared_selector_backbone"] = bool(args.shared_selector_backbone)
+    if args.shared_selector_backbone:
+        plan["deviations"].append("Shared selector/task ViT; candidate-image embedding path is stop-gradient, refreshed from current shared weights each step")
     plan_path = output / "plan.json"
     if plan_path.exists() and json.loads(plan_path.read_text()) != plan:
         raise ValueError("Different plan; preserve run output")
@@ -273,7 +303,9 @@ def main():
         if args.prepared_from:
             for split, query_ids in selected.items():
                 cached = torch.load(ROOT / args.prepared_from / f"{split}_shortlist.pt", weights_only=False)
-                required = ("official_weights_sha256", "shortlist_k", "candidate_pool")
+                # Cached global features are independent of shortlist K; rebuild
+                # neighbors at the active K from those same label-free vectors.
+                required = ("official_weights_sha256", "candidate_pool")
                 if any(cached["plan"][key] != plan[key] for key in required) or not set(query_ids).issubset(cached["query_ids"]) or not torch.equal(cached["pool_ids"], pool_ids):
                     raise ValueError("Prepared frozen features/shortlist incompatible")
                 raw = torch.load(ROOT / args.prepared_from / f"{split}_features.pt", weights_only=False)
@@ -285,7 +317,7 @@ def main():
                 nearest, similarities = [], []
                 for start in range(0, len(features), 512):
                     batch_ids = torch.tensor(query_ids[start:start + 512])
-                    values, positions = retrieve(features[start:start + 512], pool, pool_ids.to(device), 16,
+                    values, positions = retrieve(features[start:start + 512], pool, pool_ids.to(device), plan["shortlist_k"],
                                                  batch_ids.to(device), identity_ids[batch_ids].to(device), identity_ids[pool_ids].to(device))
                     nearest.append(positions.cpu())
                     similarities.append(values.cpu())
@@ -295,7 +327,7 @@ def main():
                 atomic_save({"query_ids": query_ids, "positions": positions, "similarities": torch.cat(similarities),
                              "pool_ids": pool_ids, "pool_features": pool.cpu(), "plan": plan,
                              "identity_ids": identity_ids, "prepared_from": args.prepared_from}, output / f"{split}_shortlist.pt")
-                print(f"Reused frozen {split} features; rebuilt identity-safe shortlist: {len(query_ids)} queries", flush=True)
+                print(f"Reused frozen {split} features; rebuilt identity-safe top-{plan['shortlist_k']} shortlist: {len(query_ids)} queries", flush=True)
             return
         frozen_dir = ROOT / "outputs/tacs_full_pool_dino_control_v1"
         cached_pool = torch.load(frozen_dir / "pool_features.pt", weights_only=False)
@@ -308,7 +340,7 @@ def main():
                               plan, device, 64, args.workers)
             neighbors, similarities = [], []
             for start in range(0, len(features), 512):
-                values, positions = retrieve(features[start:start + 512], pool, pool_ids.to(device), 16,
+                values, positions = retrieve(features[start:start + 512], pool, pool_ids.to(device), plan["shortlist_k"],
                                              torch.tensor(query_ids[start:start + 512], device=device),
                                              identity_ids[torch.tensor(query_ids[start:start + 512])].to(device), identity_ids[pool_ids].to(device))
                 neighbors.append(positions.cpu())
@@ -318,7 +350,7 @@ def main():
                 raise ValueError("Self retrieval")
             atomic_save({"query_ids": query_ids, "positions": positions, "similarities": torch.cat(similarities),
                          "pool_ids": pool_ids, "pool_features": pool.cpu(), "identity_ids": identity_ids, "plan": plan}, output / f"{split}_shortlist.pt")
-            print(f"Prepared {split}: {len(query_ids)} queries, 16 candidates, all self matches excluded", flush=True)
+            print(f"Prepared {split}: {len(query_ids)} queries, {plan['shortlist_k']} candidates, all self matches excluded", flush=True)
         return
     cache = {split: torch.load(output / f"{split}_shortlist.pt", weights_only=False) for split in selected}
     if any(cache[x]["plan"] != plan or cache[x]["query_ids"] != selected[x] for x in selected):
@@ -338,13 +370,16 @@ def main():
         pool_pixels = pixels["pixels"].to(device)
         print(f"GPU-resident candidate images: {pool_pixels.numel() * pool_pixels.element_size() / 2**30:.2f} GiB", flush=True)
         del pixels
+    if args.shared_selector_backbone and (pool_pixels is None or "full_tacs" not in args.arms):
+        raise ValueError("Shared selector backbone requires --cached-pixels and the full_tacs arm")
     if args.stage == "train":
         models, optimizers, scalers, schedulers, histories, bests, pending_metrics = {}, {}, {}, {}, {}, {}, {}
         for arm in args.arms:
             run = output / arm
             run.mkdir(exist_ok=True)
             set_seed(args.seed)
-            model = build_task(archive, arm, device, args.task_unfreeze_last_blocks)
+            model = build_task(archive, arm, device, args.task_unfreeze_last_blocks,
+                               shared_selector_backbone=args.shared_selector_backbone and arm == "full_tacs")
             optimizer = torch.optim.AdamW(param_groups(model, plan), weight_decay=plan["weight_decay"])
             print(f"{arm}: trainable task={sum(p.numel() for p in model.task_model.parameters() if p.requires_grad):,}; selector={sum(p.numel() for p in model.selector.parameters() if p.requires_grad) if model.selector else 0:,}", flush=True)
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
@@ -363,6 +398,15 @@ def main():
                 scheduler.load_state_dict(saved["scheduler"])
                 scaler.load_state_dict(saved["scaler"])
                 history, best = saved["history"], saved["best"]
+            elif (run / "baseline_provenance.json").exists():
+                # A prior identical No-Context arm may be imported with its
+                # provenance to avoid spending the GPU budget training it twice.
+                history = json.loads((run / "history.json").read_text())
+                saved = torch.load(run / "checkpoint_best.pt", map_location="cpu", weights_only=False)
+                if saved["plan"] != plan or saved["arm"] != arm or len(history) != args.epochs:
+                    raise ValueError("Imported completed baseline does not match this plan")
+                model.load_state_dict(saved["model"])
+                best = saved["best"]
             pending = run / "checkpoint_pending_validation.pt"
             if pending.exists():
                 saved = torch.load(pending, map_location="cpu", weights_only=False)
@@ -397,7 +441,10 @@ def main():
                                  "epoch": epoch + 1, "trained": trained, "plan": plan},
                                 output / arm / "checkpoint_pending_validation.pt")
                 loader = make_loader(source, selected["validation"], source, pool_ids, cache["validation"]["positions"], arm, args, False)
-                val, probs, labels, pairs = run_epoch(models[arm], loader, arm, device, pool_features, pool_pixels=pool_pixels)
+                validation_pool_features = pool_features
+                if arm == "full_tacs" and models[arm].selector.encoder is models[arm].task_model.backbone:
+                    validation_pool_features = encode_candidate_globals(models[arm].selector.encoder, pool_pixels.unsqueeze(0))[0]
+                val, probs, labels, pairs = run_epoch(models[arm], loader, arm, device, validation_pool_features, pool_pixels=pool_pixels)
                 schedulers[arm].step()
                 row = {"epoch": epoch + 1, "train": trained, "validation": val}
                 histories[arm].append(row)
