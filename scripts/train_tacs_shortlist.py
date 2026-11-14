@@ -211,6 +211,8 @@ def main():
     p.add_argument("--epochs", type=int, default=10)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--data-root", default="data", help="directory containing cifar-100-python/train and test")
+    p.add_argument("--base-archive", default="outputs.zip", help="zip containing the shared 5-epoch No-Context initialization")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--arms", nargs="+", choices=ARMS, default=list(ARMS))
     p.add_argument("--task-unfreeze-last-blocks", type=int, default=0,
@@ -235,7 +237,13 @@ def main():
     device = torch.device("cuda")
     output = ROOT / args.output
     output.mkdir(parents=True, exist_ok=True)
-    archive = zipfile.ZipFile(ROOT / "outputs.zip")
+    data_root = Path(args.data_root)
+    if not data_root.is_absolute():
+        data_root = ROOT / data_root
+    archive_path = Path(args.base_archive)
+    if not archive_path.is_absolute():
+        archive_path = ROOT / archive_path
+    archive = zipfile.ZipFile(archive_path)
     entry = next(x for x in archive.namelist() if "cifar100_no_context_c4_e5_unf4v3/" in x and x.endswith("checkpoint_best.pt"))
     plan = {"method": "TACS-X DINO-shortlist, query warm start", "seed": args.seed,
             "epochs": args.epochs, "batch_size": args.batch_size, "lr_backbone": 1e-5,
@@ -259,7 +267,7 @@ def main():
     if plan_path.exists() and json.loads(plan_path.read_text()) != plan:
         raise ValueError("Different plan; preserve run output")
     json_save(plan, plan_path)
-    source = TrainingImages(ROOT / "data")
+    source = TrainingImages(data_root)
     ids = list(range(50000))
     random.Random(42).shuffle(ids)
     selected = {"train": ids[5000:], "validation": ids[:5000]}
@@ -329,12 +337,19 @@ def main():
                              "identity_ids": identity_ids, "prepared_from": args.prepared_from}, output / f"{split}_shortlist.pt")
                 print(f"Reused frozen {split} features; rebuilt identity-safe top-{plan['shortlist_k']} shortlist: {len(query_ids)} queries", flush=True)
             return
-        frozen_dir = ROOT / "outputs/tacs_full_pool_dino_control_v1"
-        cached_pool = torch.load(frozen_dir / "pool_features.pt", weights_only=False)
-        if not torch.equal(cached_pool["ids"], pool_ids) or cached_pool["metadata"]["selector"] != "frozen_dino":
-            raise ValueError("Frozen pool mismatch")
-        pool = cached_pool["features"].to(device)
         encoder = DINOv3Adapter(str(ROOT / "third_party/dinov3"), weights=str(ROOT / "checkpoints/dinov3_vits16_pretrain_lvd1689m-08c60483.pth")).to(device).eval().requires_grad_(False)
+        frozen_dir = ROOT / "outputs/tacs_full_pool_dino_control_v1"
+        pool_path = frozen_dir / "pool_features.pt"
+        if pool_path.exists():
+            cached_pool = torch.load(pool_path, weights_only=False)
+            if not torch.equal(cached_pool["ids"], pool_ids) or cached_pool["metadata"]["selector"] != "frozen_dino":
+                raise ValueError("Frozen pool mismatch")
+            pool = cached_pool["features"].to(device)
+        else:
+            frozen_dir.mkdir(parents=True, exist_ok=True)
+            pool = encode(encoder, nn.Identity(), source, pool_ids.tolist(), pool_path,
+                          {"selector": "frozen_dino", "official_weights_sha256": plan["official_weights_sha256"]},
+                          device, 64, args.workers)
         for split, query_ids in selected.items():
             features = encode(encoder, nn.Identity(), source, query_ids, output / f"{split}_features.pt",
                               plan, device, 64, args.workers)
