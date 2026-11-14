@@ -241,7 +241,7 @@ td.n{font-weight:700}
       <li><a href="#ablation">Ablation</a></li>
       <li><a href="#giao-thuc">Giao thức &amp; lưu ý</a></li>
     </ul>
-    <div class="rail-foot"><b id="nruns">–</b> run có artifact trong <span class="typed">outputs/</span>.<br>Mini reproduction, không phải tái lập chính xác bài báo.</div>
+    <div class="rail-foot"><b id="nruns">–</b> run v3 từ <span class="typed">outputs.zip</span>.<br>Mini reproduction, không phải tái lập chính xác bài báo.</div>
   </nav>
 
   <main>
@@ -250,7 +250,7 @@ td.n{font-weight:700}
       <header class="card-head"><h2 id="h1">Chọn ảnh ngữ cảnh có giúp phân loại không?</h2>
         <div class="callno">TACS · CVPR 2026<br>CIFAR-100 · C=4 · 5 epoch · seed 42</div></header>
       <div class="card-body">
-        <p class="lede">Trong cấu hình mini này, <strong>chưa</strong>. Chỉ dùng ảnh query đã đạt 82,79%; thêm một ảnh context khác lớp làm giảm xuống còn khoảng 44–49%. Gộp nhiều context bằng Top-K kéo lại lên 70,99%, nhưng vẫn thấp hơn No-Context.</p>
+        <p class="lede" id="resultSummary"></p>
         <ul class="entries" aria-label="Ba số liệu chính">
           <li><span class="k">No-Context (chỉ query)</span><span class="v" id="e-noctx">–</span></li>
           <li class="hot"><span class="k">Full TACS, chọn 1 context</span><span class="v" id="e-full">–</span></li>
@@ -277,10 +277,10 @@ td.n{font-weight:700}
 
     <!-- 2 -->
     <section class="card" id="so-sanh" aria-labelledby="h2">
-      <header class="card-head"><h2 id="h2">So sánh các mode dưới cùng ngân sách</h2>
-        <div class="callno">Nhóm A · 10 run · C=4<br>backbone đóng băng</div></header>
+      <header class="card-head"><h2 id="h2">So sánh các mode theo giao thức v3</h2>
+        <div class="callno">8 run · C=4 · seed 42<br>mở khóa 4 block cuối + norm</div></header>
       <div class="card-body">
-        <p class="prose muted">Chọn một hàng để xem chi tiết. Đường đỏ nét đứt là mốc No-Context.</p>
+        <p class="prose muted">Chọn một hàng để xem chi tiết. Đường đỏ nét đứt là mốc No-Context. Cùng lịch huấn luyện; các mode có selector dùng thêm một backbone nên số tham số và chi phí khác nhau.</p>
         <div class="cmp">
           <div>
             <div class="toolbar">
@@ -307,7 +307,7 @@ td.n{font-weight:700}
         <div class="qstrip" id="qstrip" role="group" aria-label="Chọn query"></div>
         <div class="qhead" id="qhead"></div>
         <div class="modes" id="modes"></div>
-        <div class="callout"><b>Điều cần nhớ:</b> trên toàn tập test, 96–99% context được chọn thuộc lớp khác query, kể cả với DINO-similarity (96,57%). CIFAR-100 có 100 lớp nên trong 4 ứng viên hầu như không có ảnh cùng lớp. Vì vậy Top-K tăng không có nghĩa là selector đã tìm được ảnh cùng lớp.</div>
+        <div class="callout"><b>Điều cần nhớ:</b> trên toàn tập test, khoảng 96–99% context thuộc lớp khác query; DINO-similarity là 96,57%. Với Top-K, chỉ số này tính theo trọng số context. Pool chỉ lấy từ train; nhãn chỉ dùng để minh họa, không dùng để chọn context.</div>
       </div>
     </section>
 
@@ -315,7 +315,7 @@ td.n{font-weight:700}
     <!-- 3b -->
     <section class="card" id="thu" aria-labelledby="h3b">
       <header class="card-head"><h2 id="h3b">Thử nhận diện ảnh của bạn</h2>
-        <div class="callno">Suy luận thật trên CPU<br>4 checkpoint đã huấn luyện</div></header>
+        <div class="callno">Suy luận thật trên máy chủ<br>4 checkpoint v3 từ outputs.zip</div></header>
       <div class="card-body">
         <p class="live-status" id="liveStatus" aria-live="polite"><i></i><span>Đang kiểm tra máy chủ…</span></p>
         <label class="drop" id="drop" tabindex="0"><input type="file" id="file" accept="image/*">
@@ -331,21 +331,17 @@ td.n{font-weight:700}
           <button class="btn ghost" id="resample" disabled>Rút ứng viên khác</button>
         </div>
         <div id="liveOut" aria-live="polite"></div>
-        <div class="callout"><b>Cần biết:</b> mô hình chỉ có 100 lớp của CIFAR-100, nên ảnh ngoài các lớp đó vẫn bị gán vào một lớp gần nhất. Các mô hình được huấn luyện với C=4; C khác chỉ để quan sát. Hai selector top-1 ở đây chọn ứng viên điểm cao nhất (argmax), còn lúc đánh giá test thì lấy mẫu theo phân phối, nên kết quả từng ảnh có thể khác bảng số liệu.</div>
+        <div class="callout"><b>Cần biết:</b> mô hình chỉ có 100 lớp của CIFAR-100, nên ảnh ngoài các lớp đó vẫn bị gán vào một lớp gần nhất. Các mô hình v3 được huấn luyện với C=4; C khác chỉ để quan sát. Suy luận và đánh giá v3 đều chọn top-1 bằng argmax. DINO-similarity dùng encoder pretrained đóng băng để truy hồi, độc lập với backbone phân loại đã fine-tune.</div>
       </div>
     </section>
 
     <!-- 4 -->
     <section class="card" id="ablation" aria-labelledby="h4">
-      <header class="card-head"><h2 id="h4">Ablation: K, ngưỡng adaptive và số ứng viên</h2>
+      <header class="card-head"><h2 id="h4">Ablation: số context và đường học selector</h2>
         <div class="callno">Test acc · seed 42<br>5 epoch · batch 32</div></header>
       <div class="card-body">
         <div class="abl" id="abl"></div>
-        <div class="c16">
-          <h3 style="margin:0 0 4px;font:800 21px/1.15 var(--sans);font-stretch:75%">Tăng pool từ C=4 lên C=16</h3>
-          <p class="prose muted" style="margin-bottom:12px">Các run C=16 chưa có bản action-fix tương ứng cho mọi mode, nên chỉ dùng để xem xu hướng, không so trực tiếp với nhóm A.</p>
-          <div style="overflow-x:auto"><table id="c16tbl"></table></div>
-        </div>
+        <p class="prose muted">Archive v3 chưa có K=3, adaptive-K, C=16 hoặc seed thứ hai. Cần thêm các run theo cùng giao thức trước khi kết luận về những ablation này.</p>
       </div>
     </section>
 
@@ -359,23 +355,25 @@ td.n{font-weight:700}
             <h3>Thiết lập</h3>
             <dl class="kv">
               <dt>Dữ liệu</dt><dd>CIFAR-100, 45.000 / 5.000 / 10.000</dd>
-              <dt>Backbone</dt><dd>DINOv3 ViT-S/16, đóng băng</dd>
+              <dt>Backbone</dt><dd>DINOv3 ViT-S/16, mở 4 block cuối + norm</dd>
               <dt>Ảnh</dt><dd>224 × 224</dd>
               <dt>Huấn luyện</dt><dd>5 epoch, batch 32, AdamW</dd>
               <dt>Ứng viên / query</dt><dd>C = 4 (bài báo: 16)</dd>
               <dt>Pool</dt><dd>cố định, chỉ từ train</dd>
               <dt>τ · λ_policy</dt><dd>0,1 · 1,0</dd>
               <dt>Chọn checkpoint</dt><dd>theo validation</dd>
+              <dt>Đánh giá</dt><dd>v3 · argmax · RoPE horizontal</dd>
+              <dt>Nguồn số liệu</dt><dd>outputs.zip · metrics.json từng run</dd>
             </dl>
           </div>
           <div>
             <h3>Lưu ý khi đọc kết quả</h3>
             <ul class="caveats">
-              <li>Đây là mini reproduction. Selector học được <b>chưa vượt</b> DINO-similarity, trái với Bảng 2/5 của bài báo.</li>
-              <li>Chênh lệch giữa Gumbel, Policy-only và Full TACS (dưới 0,3 điểm) nằm trong nhiễu của một seed.</li>
-              <li>Multi-seed chỉ có 2 seed (42 và 1) cho 5 cấu hình, chưa đủ để kết luận thống kê.</li>
-              <li>Adaptive Top-K ở ngưỡng 0,90 chọn 3 context cho 98,52% mẫu, tức gần như Top-3 cố định.</li>
-              <li>Run mở khóa 4 block cuối (48,63%) là cấu hình huấn luyện khác, không so với nhóm A.</li>
+              <li>Đây là mini reproduction: 5 thay vì 100 epoch, batch 32 thay vì 64, ảnh 224 thay vì 256 và C=4 thay vì 16.</li>
+              <li>Chỉ fine-tune 4 block cuối và norm, lr backbone 10⁻⁵; layout RoPE horizontal là lựa chọn của dự án.</li>
+              <li>Augmentation dùng padded random crop và horizontal flip, khác random resized crop cùng horizontal/vertical flip trong bài báo.</li>
+              <li>Full TACS nhỉnh hơn DINO-similarity 0,14 điểm, nhưng mọi mode có context vẫn thấp hơn No-Context. Một seed chưa đủ để kết luận ý nghĩa thống kê.</li>
+              <li>Run có selector học cả hai backbone; baseline chỉ học backbone phân loại. Không diễn giải thành so sánh cùng số tham số hoặc cùng chi phí.</li>
             </ul>
             <span class="stamp">Không phải tái lập chính xác</span>
           </div>
@@ -402,10 +400,12 @@ function title(r){return r.mode==='topk_tacs'?`Top-K, K=${r.K}`:NAME[r.mode]}
 function cls(r){return r.mode==='no_context'?'b-ctx':(r.mode==='topk_tacs'||r.mode==='adaptive_topk_tacs')?'b-topk':'b-top1'}
 
 /* 1. headline entries */
-const A=id=>byId[id];
-$('#e-noctx').innerHTML=pct(A('cifar100_no_context_c4_e5').test);
-$('#e-full').innerHTML=pct(A('cifar100_full_tacs_c4_e5_actionfix').test);
-$('#e-topk').innerHTML=pct(A('cifar100_topk_k4_c4_e5').test);
+const runFor=(mode,k)=>D.runs.find(r=>r.mode===mode&&(k==null||r.K===k));
+const BASE=runFor('no_context'), FULL=runFor('full_tacs'), TOP4=runFor('topk_tacs',4);
+$('#e-noctx').innerHTML=pct(BASE.test);
+$('#e-full').innerHTML=pct(FULL.test);
+$('#e-topk').innerHTML=pct(TOP4.test);
+$('#resultSummary').innerHTML=`Trong cấu hình mini v3 này, context <strong>chưa vượt mốc chỉ query</strong>. No-Context đạt ${pct(BASE.test)}; Full TACS đạt ${pct(FULL.test)}; Top-K K=4 đạt ${pct(TOP4.test)}. Các số liệu được đọc trực tiếp từ outputs.zip.`;
 
 /* mechanism */
 const MODES={
@@ -427,11 +427,11 @@ document.querySelectorAll('#modeSeg button').forEach(b=>b.onclick=()=>setMode(b.
 setMode('full');
 
 /* 2. comparison */
-let metric='test', sel='cifar100_full_tacs_c4_e5_actionfix';
+let metric='test', sel=FULL.id;
 const rowsEl=$('#rows');
 function drawRows(first){
   const items=D.main.map(id=>byId[id]).sort((a,b)=>b[metric]-a[metric]);
-  const base=byId['cifar100_no_context_c4_e5'][metric];
+  const base=BASE[metric];
   rowsEl.innerHTML='';
   items.forEach(r=>{
     const b=el('button','row');b.setAttribute('aria-pressed',r.id===sel);
@@ -455,7 +455,7 @@ function curve(r){
   return `<svg class="curve" viewBox="0 0 ${W} ${H}" role="img" aria-label="Validation accuracy theo epoch, từ ${pct(v[0],1)} đến ${pct(v[v.length-1],1)}">${ticks}${xs}<polyline points="${pts}" fill="none" stroke="var(--ink)" stroke-width="2.5"/>${dots}<text x="${W-R}" y="${H-6}" text-anchor="end" style="display:none"></text></svg><div class="typed muted" style="font-size:12px">Val acc theo epoch (1–${v.length})</div>`;
 }
 function reading(r){
-  const base=byId['cifar100_no_context_c4_e5'].test, d=(r.test-base)*100;
+  const base=BASE.test, d=(r.test-base)*100;
   if(r.mode==='no_context') return 'Mốc so sánh: mô hình chỉ thấy ảnh query. Mọi mode có context phải vượt mốc này mới chứng minh context hữu ích.';
   return `So với No-Context: <b class="${d<0?'neg':'pos'}">${d>0?'+':''}${fmt(d,2)} điểm</b>. ${r.cross!=null?`${pct(r.cross,1)} context khác lớp với query.`:''}`;
 }
@@ -463,7 +463,8 @@ function drawDetail(){
   const r=byId[sel];
   $('#detail').innerHTML=`<h3>${title(r)}</h3><div class="sub">${r.id}</div>
   <dl><dt>Test acc</dt><dd>${pct(r.test)}</dd><dt>Val acc tốt nhất</dt><dd>${pct(r.val)}</dd><dt>Test loss</dt><dd>${fmt(r.loss,4)}</dd>
-  <dt>Entropy selector</dt><dd>${fmt(r.entropy,3)}${r.mode==='no_context'?'':' / 1,386'}</dd>
+  <dt>Tham số được học</dt><dd>${fmt(Object.values(r.trainableParameters).reduce((a,b)=>a+b,0),0)}</dd>
+  <dt>Entropy chọn context</dt><dd>${fmt(r.entropy,3)}${r.mode==='no_context'?'':' / 1,386'}</dd>
   <dt>Context khác lớp</dt><dd>${pct(r.cross,2)}</dd><dt>Cosine query–context</dt><dd>${fmt(r.cos,3)}</dd><dt>Mean reward</dt><dd>${r.reward==null?'không áp dụng':fmt(r.reward,3)}</dd></dl>
   <div class="gap">${curve(r)}</div><p class="read">${reading(r)}</p>`;
 }
@@ -482,7 +483,7 @@ function drawQ(){
   const q=D.queries[qi];
   $('#qhead').innerHTML=`<img class="thumb" src="${D.images[q.img]}" alt="Ảnh query: ${q.label}"><div><h3>${q.label.replace(/_/g,' ')}</h3><p>Query #${q.q-50000} của tập test. Nhãn thật: <b>${q.label.replace(/_/g,' ')}</b>.</p></div>`;
   const m=$('#modes');m.innerHTML='';
-  D.main.filter(id=>id!=='cifar100_no_context_c4_e5').forEach(id=>{
+  D.main.filter(id=>id!==BASE.id).forEach(id=>{
     const r=byId[id], ctx=q.modes[id];
     const row=el('div','mrow');
     row.appendChild(el('div','name',`${title(r)}<small>${SUB[r.mode]}</small>`));
@@ -575,20 +576,13 @@ function block(h,sub,items,note){
   });
   d.appendChild(el('p','note',note));abl.appendChild(d);
 }
-const T=id=>byId[id].test;
-block('Số context K','Gộp K ứng viên top bằng trọng số khả vi.',
- [['Top-1','Full TACS',T('cifar100_full_tacs_c4_e5_actionfix'),'b-top1'],['K = 2','',T('cifar100_topk_k2_c4_e5'),'b-topk'],['K = 3','',T('cifar100_topk_k3_c4_e5'),'b-topk'],['K = 4','dùng cả 4',T('cifar100_topk_k4_c4_e5'),'b-topk'],['No-Context','mốc',T('cifar100_no_context_c4_e5'),'b-ctx']],
- 'Càng nhiều context càng tốt, nhưng K=4 đã dùng hết pool C=4, nên phần tăng một phần là do bỏ việc “chọn”.');
-block('Ngưỡng adaptive','Số context thay đổi theo mẫu, theo độ tập trung của điểm.',
- [['0,50','',T('cifar100_adaptive_thr50_c4_e5'),'b-topk'],['0,70','',T('cifar100_adaptive_thr70_c4_e5'),'b-topk'],['0,90','',T('cifar100_adaptive_topk_c4_e5'),'b-topk'],['Top-3','cố định',T('cifar100_topk_k3_c4_e5'),'b-topk']],
- 'Ở 0,90, 98,52% mẫu dùng đúng 3 context, nên adaptive gần như trùng Top-3 (69,12% so với 69,04%). Chưa chứng minh lợi ích riêng của adaptive-K.');
-block('Hai seed','Chỉ có cho 5 cấu hình; không đủ để kết luận thống kê.',
- [['No-Context','s42',T('cifar100_no_context_c4_e5'),'b-ctx'],['No-Context','s1',T('cifar100_no_context_c4_e5_s1'),'b-ctx'],['Full TACS','s42',T('cifar100_full_tacs_c4_e5_actionfix'),'b-top1'],['Full TACS','s1',T('cifar100_full_tacs_c4_e5_s1'),'b-top1'],['Top-K K=2','s42',T('cifar100_topk_k2_c4_e5'),'b-topk'],['Top-K K=2','s1',T('cifar100_topk_k2_c4_e5_s1'),'b-topk']],
- 'Hai seed khác nhau dưới 0,6 điểm ở mỗi cặp. Thứ tự các nhóm không đổi.');
+block('Số context K','Cùng C=4; Top-K gộp embedding theo trọng số softmax.',
+ [['Top-1','Full TACS',FULL.test,'b-top1'],['K = 2','',runFor('topk_tacs',2).test,'b-topk'],['K = 4','dùng cả 4',TOP4.test,'b-topk'],['No-Context','mốc',BASE.test,'b-ctx']],
+ 'K=4 cao hơn K=2 nhưng vẫn thấp hơn No-Context. Top-1 dùng cả policy loss, còn Top-K chỉ dùng task loss: đây không phải ablation chỉ thay đổi K.');
+block('Đường học selector','Gumbel-only, Policy-only và hybrid dùng cùng giao thức v3.',
+ [['Gumbel-only','khả vi',runFor('gumbel_only').test,'b-top1'],['Policy-only','REINFORCE',runFor('policy_only').test,'b-top1'],['Full TACS','hybrid',FULL.test,'b-top1'],['DINO-sim','pretrained',runFor('dino_similarity').test,'b-top1']],
+ 'Full TACS cao hơn hai đường riêng lẻ trong seed 42; cần nhiều seed để đánh giá độ ổn định.');
 requestAnimationFrame(()=>requestAnimationFrame(()=>abl.querySelectorAll('.bar').forEach(x=>x.style.width=x.dataset.w+'%')));
-
-const pairs=[['Random','cifar100_random_c4_e5','cifar100_random_c16_e5'],['DINO-similarity','cifar100_dino_sim_c4_e5','cifar100_dino_sim_c16_e5'],['Gumbel-only','cifar100_gumbel_c4_e5_actionfix','cifar100_gumbel_c16_e5'],['Policy-only','cifar100_policy_c4_e5_actionfix','cifar100_policy_c16_e5'],['Full TACS','cifar100_full_tacs_c4_e5_actionfix','cifar100_full_tacs_c16_e5'],['Top-K, K=2','cifar100_topk_k2_c4_e5','cifar100_topk_k2_c16_e5']];
-$('#c16tbl').innerHTML='<thead><tr><th>Mode</th><th class="n">C = 4</th><th class="n">C = 16</th><th class="n">Chênh lệch</th></tr></thead><tbody>'+pairs.map(([n,a,b])=>{const d=(T(b)-T(a))*100;return `<tr><td>${n}</td><td class="n">${pct(T(a))}</td><td class="n">${pct(T(b))}</td><td class="n ${d<0?'neg':'pos'}">${d>0?'+':''}${fmt(d,2)}</td></tr>`}).join('')+'</tbody>';
 
 /* nav: current section */
 const links=[...document.querySelectorAll('#tabs a')];

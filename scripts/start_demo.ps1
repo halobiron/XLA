@@ -1,11 +1,11 @@
 param(
     [int]$Port = 8765,
-    [string]$Device = 'cpu'
+    [string]$Device = 'cuda'
 )
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$python = Join-Path $projectRoot '.venv\Scripts\python.exe'
+$python = Join-Path $projectRoot '.venv-gpu\Scripts\python.exe'
 $logDirectory = Join-Path $projectRoot 'outputs\deployment'
 
 if (-not (Test-Path -LiteralPath $python)) {

@@ -6,10 +6,10 @@ Serves demo/ (static) plus a small JSON API so the page can classify an uploaded
 image with four already-trained runs. No new dependency: stdlib http.server + torch.
 
 Fidelity notes (also shown in the UI):
-  * Models are the saved `checkpoint_best.pt` of the main-matrix runs (C=4, frozen DINOv3, 5 epochs).
+  * Models come from outputs.zip (v3, C=4, last four blocks + norm fine-tuned, 5 epochs).
   * Candidates are drawn from the same fixed, train-derived pool (seed 42, 20% of the 45k train split).
-  * Top-1 selectors use argmax of the selector score (deterministic), whereas test-set evaluation
-    sampled via Gumbel/Categorical. Top-K and DINO-similarity match their evaluation behaviour.
+  * Top-1 selectors use argmax, matching v3 test evaluation. DINO retrieval uses the
+    original frozen pretrained encoder, separate from the fine-tuned task encoder.
   * An uploaded photo is first reduced to 32x32 (CIFAR-100 resolution) and then resized to 224.
 """
 from __future__ import annotations
@@ -23,6 +23,7 @@ import pickle
 import random
 import threading
 import time
+import zipfile
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -36,16 +37,17 @@ from torchvision import transforms
 from .cli import build_model
 from .data.candidate_pool import FixedCandidatePool, PoolItem
 from .models.baselines import dino_similarity_scores
+from .models.dinov3_adapter import DINOv3Adapter
 
 ROOT = Path(__file__).resolve().parents[2]
 DEMO = ROOT / "demo"
 CIFAR = ROOT / "data" / "cifar-100-python"
 
 RUNS = {  # key -> (display name, run directory, how it picks context)
-    "no_context": ("No-Context", "cifar100_no_context_c4_e5", "none"),
-    "dino_similarity": ("DINO-similarity", "cifar100_dino_sim_c4_e5", "dino"),
-    "full_tacs": ("Full TACS (chọn 1)", "cifar100_full_tacs_c4_e5_actionfix", "argmax"),
-    "topk_k4": ("TACS-X Top-K, K=4", "cifar100_topk_k4_c4_e5", "topk"),
+    "no_context": ("No-Context", "cifar100_no_context_c4_e5_unf4v3", "none"),
+    "dino_similarity": ("DINO-similarity", "cifar100_dino_sim_c4_e5_unf4v3", "dino"),
+    "full_tacs": ("Full TACS (chọn 1)", "cifar100_full_tacs_c4_e5_unf4v3", "argmax"),
+    "topk_k4": ("TACS-X Top-K, K=4", "cifar100_topk_k4_c4_e5_unf4v3", "topk"),
 }
 MEAN, STD = (.485, .456, .406), (.229, .224, .225)
 TO_TENSOR = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor(), transforms.Normalize(MEAN, STD)])
@@ -58,6 +60,7 @@ class Engine:
         self.error: str | None = None
         self.lock = threading.Lock()
         self.models: dict = {}
+        self.archive = ROOT / "outputs.zip"
 
     def load(self):
         try:
@@ -77,15 +80,25 @@ class Engine:
             train_ids = ids[int(len(ids) * 0.1):]
             pool_ids = train_ids[:max(2, int(len(train_ids) * 0.2))]
             self.pool = FixedCandidatePool([PoolItem(i, int(self.train_y[i])) for i in pool_ids], 42)
-            for key, (_, run, _) in RUNS.items():
-                ckpt = torch.load(ROOT / "outputs" / run / "checkpoint_best.pt", map_location="cpu", weights_only=False)
-                cfg = ckpt["config"]
-                include_selector = cfg["experiment"]["mode"] not in {"no_context", "random_context", "dino_similarity"}
-                model = build_model(cfg, False, include_selector=include_selector)
-                model.load_state_dict(ckpt["model"])
-                model.topk_k = 4 if key == "topk_k4" else model.topk_k
-                self.models[key] = model.to(self.device).eval()
-                print(f"loaded {key} <- {run}", flush=True)
+            weights = ROOT / "checkpoints/dinov3_vits16_pretrain_lvd1689m-08c60483.pth"
+            if not weights.is_file():
+                raise FileNotFoundError(f"Local official DINOv3 weights required: {weights}")
+            with zipfile.ZipFile(self.archive) as archive:
+                for key, (_, run, _) in RUNS.items():
+                    ckpt = torch.load(io.BytesIO(archive.read(f"outputs/{run}/checkpoint_best.pt")),
+                                      map_location="cpu", weights_only=False)
+                    cfg = ckpt["config"]
+                    cfg["backbone"]["repo_dir"] = str(ROOT / "third_party/dinov3")
+                    cfg["backbone"]["weights"] = str(weights)
+                    include_selector = cfg["experiment"]["mode"] not in {"no_context", "random_context", "dino_similarity"}
+                    model = build_model(cfg, False, include_selector=include_selector)
+                    model.load_state_dict(ckpt["model"])
+                    self.models[key] = model.to(self.device).eval().requires_grad_(False)
+                    if key == "dino_similarity":
+                        self.dino_retriever = DINOv3Adapter(cfg["backbone"]["repo_dir"], weights=str(weights),
+                                                          pair_rope_layout=cfg["backbone"]["pair_rope_layout"])
+                        self.dino_retriever.to(self.device).eval().requires_grad_(False)
+                    print(f"loaded {key} <- {self.archive.name}/{run}", flush=True)
             self.status = "ready"
         except Exception as exc:  # surfaced to the page instead of dying silently
             self.status, self.error = "error", f"{type(exc).__name__}: {exc}"
@@ -131,7 +144,7 @@ class Engine:
             if how == "none":
                 logits, picks = model.task_model(q, None), []
             elif how == "dino":
-                s = dino_similarity_scores(model.task_model.backbone, q, cand)
+                s = dino_similarity_scores(self.dino_retriever, q, cand)
                 j = int(s.argmax(-1)); logits = model.task_model(q, cand[:, j]); picks = [(j, 1.0)]
             elif how == "argmax":
                 s = model.selector(q, cand)
@@ -154,22 +167,27 @@ class Handler(SimpleHTTPRequestHandler):
         super().__init__(*a, directory=str(DEMO), **kw)
 
     def log_message(self, fmt, *args):  # quieter console
-        if "/api/" in (args[0] if args else ""):
+        if "/api/" in str(args[0] if args else ""):
             super().log_message(fmt, *args)
+
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
 
     def _json(self, code: int, obj):
         body = json.dumps(obj, ensure_ascii=False).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):
         u = urlparse(self.path)
         if u.path == "/api/status":
-            return self._json(200, {"status": ENGINE.status, "error": ENGINE.error})
+            return self._json(200, {"status": ENGINE.status, "error": ENGINE.error,
+                                    "archive": ENGINE.archive.name, "device": str(ENGINE.device),
+                                    "runs": {key: run for key, (_, run, _) in RUNS.items()}})
         if u.path == "/api/predict-test":
             qs = parse_qs(u.query)
             try:
@@ -215,8 +233,10 @@ def main():
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--device", default="cpu")
+    ap.add_argument("--archive", type=Path, default=ROOT / "outputs.zip")
     a = ap.parse_args()
     ENGINE.device = torch.device(a.device)
+    ENGINE.archive = a.archive.resolve()
     threading.Thread(target=ENGINE.load, daemon=True).start()
     print(f"TACS-X demo on http://{a.host}:{a.port}  (models loading in background)", flush=True)
     ThreadingHTTPServer((a.host, a.port), Handler).serve_forever()

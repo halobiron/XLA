@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 src/*.egg-info/
 .venv/
+.venv-gpu/
 venv/
 data/
 !src/tacsx/data/
