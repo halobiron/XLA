@@ -1,11 +1,16 @@
-"""Live-inference server for the TACS-X demo page.
+"""Live-inference server for the TACS-X demo pages.
 
-    python -m tacsx.serve --port 8765
+    python -m tacsx.serve --port 8765 [--legacy-v3]
 
-Serves demo/ (static) plus a small JSON API so the page can classify an uploaded
-image with four already-trained runs. No new dependency: stdlib http.server + torch.
+Serves demo/ (static) plus a small JSON API. No new dependency: stdlib http.server + torch.
 
-Fidelity notes (also shown in the UI):
+* ``/api/steps`` (index.html): step-by-step trace of the clean_v3 No-Context and
+  Full-TACS checkpoints via ``tacsx.stepwise.StepwiseEngine`` (same code that bakes
+  demo/steps_data.js).
+* ``/api/status``, ``/api/predict`` (results_v3.html): the four older v3 runs; only
+  loaded with ``--legacy-v3``.
+
+Fidelity notes for the legacy v3 endpoints:
   * Models come from outputs.zip (v3, C=4, last four blocks + norm fine-tuned, 5 epochs).
   * Candidates are drawn from the same fixed, train-derived pool (seed 42, 20% of the 45k train split).
   * Top-1 selectors use argmax, matching v3 test evaluation. DINO retrieval uses the
@@ -38,6 +43,7 @@ from .cli import build_model
 from .data.candidate_pool import FixedCandidatePool, PoolItem
 from .models.baselines import dino_similarity_scores
 from .models.dinov3_adapter import DINOv3Adapter
+from .stepwise import StepwiseEngine
 
 ROOT = Path(__file__).resolve().parents[2]
 DEMO = ROOT / "demo"
@@ -162,6 +168,32 @@ class Engine:
 ENGINE = Engine()
 
 
+class Steps:
+    """Lazy holder for the clean_v3 step-by-step engine."""
+
+    def __init__(self):
+        self.status, self.error, self.engine, self.device = "loading", None, None, "cpu"
+        self.lock = threading.Lock()
+
+    def load(self):
+        try:
+            self.engine = StepwiseEngine(self.device).load()
+            self.status = "ready"
+            print("loaded clean_v3 no_context + full_tacs for /api/steps", flush=True)
+        except Exception as exc:
+            self.status, self.error = "error", f"{type(exc).__name__}: {exc}"
+            print("STEPS LOAD FAILED:", self.error, flush=True)
+
+    def run(self, arr: np.ndarray):
+        t0 = time.time()
+        trace, cand_ids = self.engine.trace(arr)
+        images = {str(i): Engine._thumb(self.engine.images[i]) for i in cand_ids}
+        return {"trace": trace, "query": Engine._thumb(arr), "images": images, "seconds": round(time.time() - t0, 2)}
+
+
+STEPS = Steps()
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=str(DEMO), **kw)
@@ -184,6 +216,9 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
+        if u.path == "/api/steps/status":
+            return self._json(200, {"status": STEPS.status, "error": STEPS.error, "device": STEPS.device,
+                                    "run": "outputs/tacs_shortlist_fullft_clean_v3"})
         if u.path == "/api/status":
             return self._json(200, {"status": ENGINE.status, "error": ENGINE.error,
                                     "archive": ENGINE.archive.name, "device": str(ENGINE.device),
@@ -204,7 +239,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         u = urlparse(self.path)
-        if u.path != "/api/predict":
+        if u.path not in {"/api/predict", "/api/steps"}:
             return self._json(404, {"error": "not found"})
         n = int(self.headers.get("Content-Length", 0))
         if n <= 0 or n > 12 * 1024 * 1024:
@@ -215,6 +250,14 @@ class Handler(SimpleHTTPRequestHandler):
             img = Image.open(io.BytesIO(raw)); img.load()
         except Exception:
             return self._json(400, {"error": "Không đọc được file ảnh. Hãy dùng JPG, PNG hoặc WebP."})
+        if u.path == "/api/steps":
+            if STEPS.status != "ready":
+                return self._json(503, {"error": "Mô hình clean_v3 chưa sẵn sàng: " + (STEPS.error or STEPS.status)})
+            try:
+                with STEPS.lock:
+                    return self._json(200, STEPS.run(Engine._to_cifar(img)))
+            except Exception as exc:
+                return self._json(500, {"error": str(exc)})
         try:
             c = int(qs.get("c", ["4"])[0]); rs = int(qs.get("r", ["0"])[0])
             if not 1 <= c <= 16:
@@ -234,10 +277,16 @@ def main():
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--archive", type=Path, default=ROOT / "outputs.zip")
+    ap.add_argument("--legacy-v3", action="store_true", help="also load the four v3 runs for results_v3.html")
     a = ap.parse_args()
     ENGINE.device = torch.device(a.device)
     ENGINE.archive = a.archive.resolve()
-    threading.Thread(target=ENGINE.load, daemon=True).start()
+    STEPS.device = a.device
+    threading.Thread(target=STEPS.load, daemon=True).start()
+    if a.legacy_v3:
+        threading.Thread(target=ENGINE.load, daemon=True).start()
+    else:
+        ENGINE.status, ENGINE.error = "error", "v3 models not loaded; restart with --legacy-v3"
     print(f"TACS-X demo on http://{a.host}:{a.port}  (models loading in background)", flush=True)
     ThreadingHTTPServer((a.host, a.port), Handler).serve_forever()
 

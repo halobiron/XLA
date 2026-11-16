@@ -34,7 +34,7 @@ from tacsx.data.cifar100 import _transform
 from tacsx.data.identity import pixel_identity_ids, heldout_without_identity_overlap
 from tacsx.engine import _set_training_mode, set_seed
 from tacsx.models.dinov3_adapter import DINOv3Adapter
-from tacsx.models.selector import TACSSelector
+from tacsx.models.selector import TACSSelector, ResidualSelectorProjection
 from tacsx.models.tacs import TACSClassifier
 from tacsx.models.retrieval_fusion import retrieve
 
@@ -82,10 +82,12 @@ def encode_candidate_globals(encoder, candidate_images, chunk_size=128):
     """Refresh current candidate embeddings without retaining encoder activations."""
     b, n, c, h, w = candidate_images.shape
     flat = candidate_images.reshape(b * n, c, h, w)
+    dtype = next(encoder.parameters()).dtype
     outputs = []
     with torch.no_grad():
         for start in range(0, len(flat), chunk_size):
-            outputs.append(encoder.encode_global(flat[start:start + chunk_size]))
+            images = flat[start:start + chunk_size].to(dtype=dtype)
+            outputs.append(encoder.encode_global(images))
     return torch.cat(outputs).reshape(b, n, -1)
 
 
@@ -94,7 +96,7 @@ def learned_scores(model, query, candidate_features, scale, candidate_images=Non
         with torch.no_grad():
             q = model.selector.encoder.encode_global(query)
     else:
-        # In this arm the selector query path shares the trainable task ViT.
+        # Trainable selector: refresh candidates from the same current weights.
         q = model.selector.encoder.encode_global(query)
         candidate_features = encode_candidate_globals(model.selector.encoder, candidate_images)
     q = F.normalize(model.selector.projector(q), dim=-1)
@@ -119,8 +121,8 @@ def run_epoch(model, loader, arm, device, pool_features, optimizer=None, scaler=
                 positions = batch["candidate_positions"].to(device)
                 candidates = pool_pixels[positions] if pool_pixels is not None else batch["candidates"].to(device)
                 features = pool_features[positions]
-                shared = arm == "full_tacs" and model.selector.encoder is model.task_model.backbone
-                scores = learned_scores(model, q, features, scale, candidates if shared else None) if arm == "full_tacs" else score(model, q, features, scale)
+                refresh = arm == "full_tacs" and training and any(p.requires_grad for p in model.selector.encoder.parameters())
+                scores = learned_scores(model, q, features, scale, candidates if refresh else None) if arm == "full_tacs" else score(model, q, features, scale)
             out = model.run_mode(arm, q, candidates, y, scores)
             loss = out.task_loss + model.lambda_policy * out.policy_loss
         with torch.no_grad():
@@ -164,7 +166,8 @@ def run_epoch(model, loader, arm, device, pool_features, optimizer=None, scaler=
     return result, probs, labels, pairs
 
 
-def build_task(archive, arm, device, last_n=0, shared_selector_backbone=False):
+def build_task(archive, arm, device, last_n=0, shared_selector_backbone=False,
+               lambda_policy=1., selector_projector="linear", selector_unfreeze_last_blocks=0):
     model, _, cfg = load_model(archive, "no_context", device)
     # Re-enable every downstream parameter before applying the new protocol.
     # The warm-start checkpoint itself used only the last four blocks.
@@ -179,12 +182,17 @@ def build_task(archive, arm, device, last_n=0, shared_selector_backbone=False):
         encoder = model.task_model.backbone
     else:
         encoder = DINOv3Adapter(cfg["backbone"]["repo_dir"], weights=cfg["backbone"]["weights"]).to(device).eval().requires_grad_(False)
+        if selector_unfreeze_last_blocks:
+            from tacsx.cli import _freeze
+            _freeze(encoder, True, selector_unfreeze_last_blocks)
     selector = TACSSelector(encoder, projection=False)
     selector.projector = nn.Linear(encoder.embedding_dim, encoder.embedding_dim, bias=False).to(device)
     nn.init.eye_(selector.projector.weight)
+    if selector_projector == "residual_mlp":
+        selector.projector = ResidualSelectorProjection(encoder.embedding_dim).to(device)
     if arm != "full_tacs":
         selector.projector.requires_grad_(False)
-    return TACSClassifier(selector, model.task_model, tau=.1, lambda_policy=1., eval_selection="argmax").to(device)
+    return TACSClassifier(selector, model.task_model, tau=.1, lambda_policy=lambda_policy, eval_selection="argmax").to(device)
 
 
 def make_loader(source, selected, pool_source, pool_ids, positions, arm, args, training, epoch=0):
@@ -224,7 +232,17 @@ def main():
     p.add_argument("--pixel-cache", help="reuse an immutable compatible pixel cache")
     p.add_argument("--shared-selector-backbone", action="store_true",
                    help="share the trainable task ViT with the selector; refresh candidate embeddings each step")
+    p.add_argument("--lambda-policy", type=float, default=1.)
+    p.add_argument("--selector-projector", choices=("linear", "residual_mlp"), default="linear")
+    p.add_argument("--selector-unfreeze-last-blocks", type=int, default=0)
+    p.add_argument("--stop-after-epochs", type=int, help="pilot cap; keeps --epochs as cosine horizon")
     args = p.parse_args()
+    if args.lambda_policy < 0:
+        p.error("--lambda-policy must be nonnegative")
+    if not 0 <= args.selector_unfreeze_last_blocks <= 12 or (args.stop_after_epochs is not None and not 1 <= args.stop_after_epochs <= args.epochs):
+        p.error("Invalid selector block count or pilot epoch cap")
+    if args.selector_unfreeze_last_blocks and (args.shared_selector_backbone or args.arms != ["full_tacs"] or not args.cached_pixels):
+        p.error("Separate trainable selector requires only full_tacs, cached pixels, and no shared backbone")
     if args.shortlist_k < 2:
         p.error("--shortlist-k must be at least 2 for categorical selection")
     if not torch.cuda.is_available():
@@ -261,6 +279,19 @@ def main():
             "deviations": (["All task models continue same 5-epoch No-Context checkpoint", f"DINO nearest-{args.shortlist_k} shortlist", "Explicit cosine logit scale 1/.07", "224px, batch32, 10 continuation epochs, one seed", "Shortlist uses clean query; selector scores actual augmented query during training"] + ([] if args.shared_selector_backbone else ["Frozen selector encoder with trainable linear projection"])),
             "selection_metric": "validation top1 accuracy, CE tie-break", "test_tuning": False}
     plan["shared_selector_backbone"] = bool(args.shared_selector_backbone)
+    plan["lambda_policy"] = args.lambda_policy
+    if args.stop_after_epochs is not None:
+        plan["stop_after_epochs"] = args.stop_after_epochs
+    if args.selector_unfreeze_last_blocks:
+        plan["selector_unfreeze_last_blocks"] = args.selector_unfreeze_last_blocks
+        plan["selector"] = f"official DINO encoder last {args.selector_unfreeze_last_blocks} blocks plus final norm trainable; identity linear projector"
+        plan["deviations"].append("Selector candidate globals refreshed each training step with stop-gradient; query embedding path receives gradient; validation pool refreshed in eval mode")
+    if args.lambda_policy != 1.:
+        plan["deviations"].append(f"Policy weight changed to {args.lambda_policy}")
+    if args.selector_projector != "linear":
+        plan["selector_projector"] = args.selector_projector
+        plan["selector"] = "frozen official DINO encoder, trainable identity-initialized residual MLP projection, scaled cosine"
+        plan["deviations"].append("Residual MLP replaces linear selector projection; additional selector parameters")
     if args.shared_selector_backbone:
         plan["deviations"].append("Shared selector/task ViT; candidate-image embedding path is stop-gradient, refreshed from current shared weights each step")
     plan_path = output / "plan.json"
@@ -316,6 +347,17 @@ def main():
                 required = ("official_weights_sha256", "candidate_pool")
                 if any(cached["plan"][key] != plan[key] for key in required) or not set(query_ids).issubset(cached["query_ids"]) or not torch.equal(cached["pool_ids"], pool_ids):
                     raise ValueError("Prepared frozen features/shortlist incompatible")
+                if cached["positions"].shape[1] == args.shortlist_k and torch.equal(cached["identity_ids"], identity_ids):
+                    lookup = {qid: index for index, qid in enumerate(cached["query_ids"])}
+                    indices = [lookup[qid] for qid in query_ids]
+                    positions = cached["positions"][indices]
+                    if (identity_ids[pool_ids[positions]] == identity_ids[torch.tensor(query_ids)][:, None]).any():
+                        raise ValueError("Pixel-identical candidate in reused shortlist")
+                    atomic_save({**cached, "query_ids":query_ids, "positions":positions,
+                                 "similarities":cached["similarities"][indices], "plan":plan,
+                                 "prepared_from":args.prepared_from}, output / f"{split}_shortlist.pt")
+                    print(f"Reused identical identity-safe {split} shortlist: {len(query_ids)} queries", flush=True)
+                    continue
                 raw = torch.load(ROOT / args.prepared_from / f"{split}_features.pt", weights_only=False)
                 if raw["ids"].tolist() != cached["query_ids"]:
                     raise ValueError("Frozen query feature identity mismatch")
@@ -394,7 +436,9 @@ def main():
             run.mkdir(exist_ok=True)
             set_seed(args.seed)
             model = build_task(archive, arm, device, args.task_unfreeze_last_blocks,
-                               shared_selector_backbone=args.shared_selector_backbone and arm == "full_tacs")
+                               shared_selector_backbone=args.shared_selector_backbone and arm == "full_tacs",
+                               lambda_policy=args.lambda_policy, selector_projector=args.selector_projector,
+                               selector_unfreeze_last_blocks=args.selector_unfreeze_last_blocks)
             optimizer = torch.optim.AdamW(param_groups(model, plan), weight_decay=plan["weight_decay"])
             print(f"{arm}: trainable task={sum(p.numel() for p in model.task_model.parameters() if p.requires_grad):,}; selector={sum(p.numel() for p in model.selector.parameters() if p.requires_grad) if model.selector else 0:,}", flush=True)
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
@@ -439,7 +483,7 @@ def main():
             print(f"{arm}: restored {len(history)} epochs, optimizer scalar counters on CPU={len(steps)}", flush=True)
             models[arm], optimizers[arm], schedulers[arm], scalers[arm] = model, optimizer, scheduler, scaler
             histories[arm], bests[arm] = history, best
-        for epoch in range(args.epochs):
+        for epoch in range(args.stop_after_epochs or args.epochs):
             for arm in args.arms:
                 if len(histories[arm]) > epoch:
                     continue
@@ -457,7 +501,8 @@ def main():
                                 output / arm / "checkpoint_pending_validation.pt")
                 loader = make_loader(source, selected["validation"], source, pool_ids, cache["validation"]["positions"], arm, args, False)
                 validation_pool_features = pool_features
-                if arm == "full_tacs" and models[arm].selector.encoder is models[arm].task_model.backbone:
+                if arm == "full_tacs" and any(p.requires_grad for p in models[arm].selector.encoder.parameters()):
+                    models[arm].eval()
                     validation_pool_features = encode_candidate_globals(models[arm].selector.encoder, pool_pixels.unsqueeze(0))[0]
                 val, probs, labels, pairs = run_epoch(models[arm], loader, arm, device, validation_pool_features, pool_pixels=pool_pixels)
                 schedulers[arm].step()

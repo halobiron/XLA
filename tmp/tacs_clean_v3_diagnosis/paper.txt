@@ -1,0 +1,1010 @@
+
+PAGE 1
+Learning What Helps: Task-Aligned Context Selection for Vision Tasks
+Jingyu Guo 1,2 * Emir Konuk 1,2,3 Fredrik Strand 3 Christos Matsoukas 4
+Kevin Smith 1,2
+1 KTH Royal Institute of Technology, Sweden 2 Science for Life Laboratory, Sweden
+3 Karolinska Institutet, Sweden 4 AstraZeneca, Sweden
+Abstract
+Humans often resolve visual uncertainty by comparing
+an image with relevant examples, but ViTs lack the abil-
+ity to identify which examples would improve their predic-
+tions. We present Task-Aligned Context Selection (TACS), a
+framework that learns to select paired examples which truly
+improve task performance rather than those that merely ap-
+pear similar. TACS jointly trains a selector network with the
+task model through a hybrid optimization scheme combin-
+ing gradient-based supervision and reinforcement learning,
+making retrieval part of the learning objective. By aligning
+selection with task rewards, TACS enables discriminative
+models to discover which contextual examples genuinely
+help. Across 18 datasets covering fine-grained recognition,
+medical image classification, and medical image segmen-
+tation, TACS consistently outperforms similarity-based re-
+trieval, particularly in challenging or data-limited settings.
+1. Introduction
+Large language models (LLMs) have evolved into multi-
+modal generalists that excel across a broad range of tasks:
+they can reason across modalities, concepts, and domains.
+They can even improve their answers by grounding their
+predictions through the retrieval of relevant external infor-
+mation [24, 30, 52]. This ability has become a defining
+feature of generalist intelligence, with recent works now
+proposing methods to learn what to retrieve [3, 13]. Spe-
+cialist models, however, currently lack mechanisms for in-
+corporating retrieved information into their decisions apart
+from a few multi-view or multi-instance methods that rely
+on pre-defined or manually paired data [2, 15, 17, 43]. Nev-
+ertheless, architectures such as Vision Transformers (ViTs)
+continue to dominate discriminative vision tasks like classi-
+fication and segmentation [5, 44], especially in specialized
+domains such as medical analysis [39]. What remains unex-
+*Corresponding author: Jingyu Guo<jingyug@kth.se>
+Selector
+Highest
+Pool of context candidatesQuery image
+Learn to Select
+Constructed pair
+Downstream 
+Task Network
+Utility Scores
+Better performance
+Figure 1. Overview of Task-Aligned Context Selection (TACS).
+Given a query image, TACS learns to select the most informative
+example from a candidate pool to form a task-aligned input pair.
+Aselector networkpredicts which candidate provides the most
+useful context for thedownstream task network, (e.g. classifier or
+segmentor) which operates on the selected pair. By learning to re-
+trieve helpful rather than merely similar examples, TACS improves
+decision accuracy and robustness, particularly in ambiguous cases.
+plored is how a specialist model could learn to retrieve the
+visual context that would help it perform better. This high-
+lights a critical gap: we have taught our generalists to find
+the information they need, but not our specialists. Bridging
+this gap raises a fundamental question:can a specialized vi-
+sion model learn which contextual examples most improve
+its own performance?
+Human specialists like radiologists use contextual infor-
+mation to improve visual judgments. For example, when
+distinguishing between benign and malignant findings, a ra-
+diologist may refer not only to similar prior cases but also
+to different ones to clarify diagnostic boundaries. Likewise,
+a visual recognition system may benefit more from pairing
+an input image with a complementary example,e.g., one
+This CVPR paper is the Open Access version, provided by the Computer Vision Foundation.
+ Except for this watermark, it is identical to the accepted version;
+the final published version of the proceedings is available on IEEE Xplore.
+11632
+
+
+PAGE 2
+that reveals discriminative contrasts, than from retrieving
+the nearest neighbor. This observation suggests that learn-
+ing to selecthelpfulexamples, rather than merelysimilar
+ones, could unlock a new form of contextual reasoning for
+discriminative models.
+However, existing vision systems have no mechanism
+to determine which contextual information would actually
+improve their predictions. The few methods that incorpo-
+rate auxiliary inputs rely on fixed heuristics,e.g., visual
+similarity, class membership, or spatial proximity, rather
+than learning which examples are truly useful for the task.
+The success of retrieval-augmented generation (RAG) in
+language models [24, 30] has inspired a broader family
+of retrieval-augmented learning (RAL) approaches [4, 11,
+18, 31, 50, 52], where models retrieve external informa-
+tion to improve reasoning and prediction in generalist sys-
+tems. However, for specialized models in visual recognition
+such as ViTs, retrieval remains a static preprocessing step:
+lacking mechanisms to process dynamic external context,
+they rely on pre-computed similarity metrics or embeddings
+such as CLIP or DINO [32, 36, 51], implicitly assuming
+that perceptual similarity equates to usefulness. This as-
+sumption is debatable, as visual similarity alone does not
+guarantee that an example will help a ViT make a better
+decision.
+We propose Task-Aligned Context Selection (TACS),
+a framework that enables discriminative visual models to
+learn what helps. TACS transforms context selection from
+a static, pre-defined operation into a learnable, task-aligned
+component of the visual pipeline. It comprises two jointly
+optimized modules: aselector network, which learns to
+identify contextual examples that are most informative, and
+adownstream network, which performs the primary vision
+task using both the input and the selected context (Fig. 1).
+The selector is trained with a hybrid optimization scheme
+that combines gradient-based learning via differentiable re-
+laxation with reinforcement learning for discrete selection,
+which allows it to receive feedback directly from the down-
+stream objective and align selection with task performance.
+TACS enables discriminative models such as ViTs to
+learn which contextual information improves their predic-
+tions, introducing task-aligned retrieval for vision-only ar-
+chitectures. This is particularly valuable in data-limited do-
+mains like medical imaging, where paired data and annota-
+tions are scarce. Our contributions are as follows:
+1.Task-Aligned Context Selection for ViTs.We present
+Task-Aligned Context Selection, a framework that en-
+ables vision-only models to learn which auxiliary sam-
+ples improve downstream performance.
+2.A hybrid optimization strategy.We develop a hybrid
+training approach that combines gradient-based learning
+via differentiable relaxation with reinforcement learning
+for discrete selection, allowing the selector network to
+align its choices directly with downstream performance
+signals (e.g. cross-entropy loss).
+3.Comprehensive empirical validation.We evaluate
+TACS on18datasets covering fine-grained natural im-
+age classification, medical image classification, and seg-
+mentation, demonstrating consistent improvements, es-
+pecially in challenging or data-limited settings.
+2. Related Work
+Relevant prior work spans two main areas: retrieval-
+augmented learning in computer vision and optimization
+strategies for learnable sampling and discrete selection.
+Retrieval-Augmented Learning in Vision
+Retrieval-augmented learning enhances model performance
+by conditioning predictions on external information re-
+trieved from large corpora. It originated in natural language
+processing through retrieval-augmented generation (RAG),
+where language models retrieve and condition on relevant
+text to solve knowledge-based tasks [3, 13, 16, 20, 24, 30,
+45]. The idea has since expanded to multimodal reason-
+ing [11, 18, 31, 50], integrating visual and textual evidence,
+and to vision-only systems [4, 36, 51] that enhance recog-
+nition or grounding by referencing retrieved images.
+In these frameworks, retrieval is often treated as a latent
+variable [24, 31], and models are trained to identify em-
+beddings that best support a generation or reasoning objec-
+tive. This approach has proven effective for large generalist
+models that can dynamically condition on retrieved context.
+In computer vision, retrieval-augmented methods have been
+explored for long-tail recognition [36], domain generaliza-
+tion [34, 35], and few-shot learning [35, 51]. REACT [34]
+and SW AT [35] adapt vision-language models on retrieved
+web data, showing that retrieval can improve transfer when
+relevant examples are available. However, in both frame-
+works, retrieval is static and similarity-driven: retrieved im-
+ages are chosen from CLIP or VLM embeddings and used
+only as additional training data. More broadly, retrieval in
+discriminative vision models remains a static preprocessing
+step, relying on pre-computed similarity metrics or frozen
+embeddings (e.g., CLIP or DINO) [32, 36, 51], and implic-
+itly assuming that perceptual similarity correlates with task
+usefulness. Unlike generalist systems that flexibly incorpo-
+rate arbitrary external context, discriminative architectures
+such as ViTs are trained on fixed single-view inputs and
+lack mechanisms to dynamically integrate retrieved exam-
+ples. In contrast, TACS redefines retrieval as part of the in-
+ference process itself, learning a per-instance, task-aligned
+selection policy that optimizes for downstream performance
+rather than resemblance.
+Differentiable and Reinforcement-Based Selection
+Retrieval inherently involves discrete choices, posing chal-
+11633
+
+
+PAGE 3
+lenges for end-to-end optimization. To address this,
+prior work has explored differentiable relaxations or
+reinforcement-based training that let gradients shape re-
+trieval policies. Differentiable approximations include at-
+tention distillation [20], perplexity distillation [21], and at-
+tentive fusion [18], which propagate task gradients through
+retrieval weights. Complementary reinforcement-based
+strategies explicitly optimize retrieval using task-dependent
+rewards [3, 13, 31, 42]. SmartRAG [13] and RAG-
+DDR [31] introduced differentiable data rewards to jointly
+train retrieval and generation modules, while DRO [42]
+treated retrieval as importance sampling over latent permu-
+tations, using policy-based reinforcement learning to maxi-
+mize expected task performance. These works show that re-
+trieval quality improves when selection is shaped by down-
+stream outcomes rather than static metrics.
+However, existing differentiable and reinforcement-
+based retrieval methods target generative or multimodal
+tasks. They have not been applied to discriminative vi-
+sual settings, where the value of retrieved context must be
+measured by its contribution to predictive accuracy rather
+than text fluency or coherence. Our approach extends
+this principle to visual recognition: we introduce a hybrid
+framework that combines gradient-based embedding learn-
+ing with policy-gradient optimization using downstream
+reward signals. This formulation enables task-aligned,
+learnable context selection for discriminative architectures
+such as ViTs, a capability not addressed by prior retrieval-
+augmented methods.
+3. Method
+We propose TACS, a framework that enables discrimina-
+tive vision models to learn which contextual examples most
+improve their predictions. ASelectorretrieves informative
+samples from a candidate pool and is trained jointly with
+aDownstream Task Network(e.g. classifier or segmentor),
+making retrieval itself part of the learning objective.
+Intuitively, the Selector learns a notion ofhelpfulness:
+the expected gain in downstream task performance if a re-
+trieved candidate is paired with the query. But retrieval is
+inherently discrete, making end-to-end optimization diffi-
+cult. We address this with a hybrid optimization strategy
+combining two complementary signals: (1) adifferentiable
+sampling paththat provides stable gradient flow and models
+smooth utility relationships across candidates, and (2) apol-
+icy optimization paththat refines selection through reward-
+based feedback from the downstream task, trained jointly as
+illustrated in Fig. 2.
+3.1. Architecture
+Given a query image xq ∈R H×W×C and a pool of Nc
+candidates {xic}Nci=1, the Selector backbone encodes them
+into zq and zic ∈R (L+1)×D where L denotes the number of
+spatial tokens and D is the feature size. Each candidate’s
+utility scoreis computed as
+sic =z Tq zic, (1)
+and converted into selection probabilities
+p(xic|xq) = exp(sic)PNc
+j=1 exp(sjc) . (2)
+During inference, the selected context is
+xsel = arg maxi p(xic|xq). (3)
+The Downstream Task Network fd predicts ˆy=
+fd(xq, xsel), and its gradients provide feedback to the Se-
+lector through both optimization paths (Sec. 3.2). This
+joint training encourages embeddings that reflecttask util-
+ityrather than visual similarity, transforming retrieval from
+a static preprocessing step into a learnable component of a
+discriminative pipeline.
+3.2. Learning to Select via Hybrid Optimization
+Training the Selector involves discrete retrieval choices,
+which prevents direct gradient propagation. To make re-
+trieval learnable, we employ a hybrid optimization strategy
+that combines differentiable relaxation with policy-based
+reinforcement. The differentiable path provides stable gra-
+dient flow and shapes smooth utility relationships between
+candidates, while the policy path reinforces discrete selec-
+tion behaviors that truly improve downstream performance.
+Differentiable sampling path.To enable end-to-end gra-
+dient flow, we adopt the straight-through Gumbel-Softmax
+estimator [22], a differentiable approximation to categori-
+cal sampling. This allows the Selector to generate one-hot
+selections during the forward pass while maintaining gradi-
+ents during backpropagation. The Gumbel-Softmax distri-
+bution provides a continuous relaxation of categorical dis-
+tributions by adding Gumbel noise to logits:
+gi =−log(−log(u i)), u i ∼ U(0,1) (4)
+The soft sample is then computed using a temperature-
+controlled softmax instead of Eq. (2):
+p
+ 
+xic|xq = exp  (sic +g i)/τ PNc
+j=1 exp
+
+(sjc +g j)/τ  (5)
+We apply straight through estimation onp
+ 
+xic|xq for a cat-
+egorical selection following [22], to maintain gradient sta-
+bility and selection sharpness. The corresponding objective
+for the downstream task is
+Lgrad =L ce(fd(xq, xsel), y), (6)
+11634
+
+
+PAGE 4
+Raw scores
+Eq. (1)
+Utility Score 
+Computation
+Differentiable Sampling Path
+Gumbel Noise
+Straight Through Estimation 
+for Categorical Selection
+Log Probability 
+Computation
+Categorical Sampling
+Downstream Task 
+Network
+Selector Encoder
+arg max()
+Inference
+Training
+(a)
+… …CLS 
+token
+Classifier
+(c)
+Gated cross-
+attention 
+Segmentation 
+Head
+… …
+×	𝑁
+(d)
+Self-attention Self-attention 
+Pool of context candidates
+𝑥!
+𝑥"##$%&!
+𝑧!
+𝑧"##$%&!
+𝑠"
+𝑥’()
+𝑓*
+ℒpolicy	~	∆ℒ"(
+𝑔#
+ℒgrad	~	ℒ"(
+𝑥!
+(b)
+𝑓"
+Query image
+Selected image
+𝑥’()
+Selected image
+Query image
+𝑥! 𝑥’()
+Selected image
+Query image
+𝑥’()
+Selected image
+Policy Optimization Path
+Task loss Policy loss
+Temp-Softmax
+Figure 2. Architecture and training flow of Task-Aligned Context Selection (TACS). (a) The Selector processes a query imagex q and
+candidate poolx ic and selects the most helpful sample. During training, the selection is optimized through two complementary optimization
+paths (b). The differentiable Sampling path (blue) uses the straight through Gumbel-Softmax reparameterization on the utility scoress c to
+implement a categorical selection of candidates, enabling end-to-end gradient flow via the task lossL grad. The policy path (red) samples
+a discrete action based ons c and updates the Selector using policy gradients with a task-aligned rewardr(o, a)derived from downstream
+performance. Gradients and rewards jointly update shared Selector parameters. (c–d) Examples of downstream tasks: classification and
+segmentation. The combined loss enables stable yet decisive task-aligned selection.
+whereL ce is the task loss.
+Reward-based policy optimization path.While differ-
+entiable sampling stabilizes training, it does not explic-
+itly evaluate whether adding a retrieved image actually im-
+proves the downstream prediction. Ideally, a good selection
+should satisfy:
+Lce(fd(xq, xc), y)<L ce(fd(xq,∅), y), (7)
+indicating that the retrieved context yields a lower task loss
+than using the query alone. To capture this relative im-
+provement, we optimize the Selector as a policy that re-
+ceives reward feedback from the downstream model. In
+this path, the Selector acts as an agent with observations
+o={z q, z1c , ..., zNcc }, actionsa∈ {1, ..., Nc}, and a pol-
+icyπ(a|o) = softmax(s(o))parameterized by the utility
+scores. The reward measures the improvement in down-
+stream performance:
+r(o, a) =Lce(fd(xq,∅), y)− Lce(fd(xq, xac ), y), (8)
+where positive rewards indicate that the retrieved image im-
+proves task accuracy. Gradients are detached from the Task
+model so that policy updates depend solely on reward sig-
+nals. The policy objective is then defined as:
+Lpolicy =−E a∼π(·|o)
+
+logπ(a|o)A(o, a)
+
+, (9)
+where A(o, a)denotes the advantage function, computed as
+the standardized reward within each batch to reduce gradi-
+ent variance and stabilize updates.
+Joint objective.Both optimization paths share the Selector
+parameters and are trained jointly, ensuring that gradients
+and rewards influence a shared notion of task utility. The
+overall training loss combines both components:
+LTACS =L grad +λL policy, (10)
+whereλbalances gradient-based and reward-based updates.
+4. Experiments
+We evaluate the proposed Task-Aligned Context Selection
+on diverse visual recognition tasks to test three hypotheses:
+(1) TACS generalizes across tasks and domains, including
+natural and medical imaging; (2) its gains arise from learn-
+ing task-aligned selection; and (3) the learned selection pol-
+icy captures interpretable contextual relationships that differ
+from conventional similarity-based retrieval.
+11635
+
+
+PAGE 5
+Table 1. Summary of datasets used in evaluation. The chosen
+datasets span diverse visual domains and supervision levels to test
+generalization and robustness.
+Domain Task #Datasets Example Benchmarks
+Natural Fine-grained classification 11 CUB, Cars, SUN397, ...
+Medical Classification 4 DDSM, ISIC, APTOS, ...
+Medical Segmentation 3 ISIC-2017, Kvasir, DRIVE
+4.1. Datasets and Tasks
+To assess generalization, we evaluate TACS across18
+datasetsspanning natural and medical imaging. These
+were chosen to represent complementary challenges: fine-
+grained recognition tests subtle inter-class boundaries, med-
+ical classification probes robustness under diagnostic ambi-
+guity and data scarcity, and medical segmentation evaluates
+structured reasoning under limited supervision (Tab. 1).
+Fine-grained natural image classification.We use 11
+benchmarks including Aircraft [38], Caltech-101 [12],
+Caltech-256 [14], CIFAR-10 [28], CIFAR-100 [28], CUB
+[48], DTD [8], Food-101 [6], Oxford Pets [40], Stanford
+Cars [27], and SUN397 [49]. These datasets range from
+5,000to110,000images and emphasize subtle appearance
+variations and large intra-class diversity, an ideal setting to
+evaluate whether learned contextual pairing enhances dis-
+crimination.
+Medical image classification.We include four datasets
+from breast (DDSM [29]), skin (ISIC-2019 [9, 10, 47]),
+colorectal cancer (Col. [26]) and retinal (APTOS2019 [25])
+imaging. They feature small sample sizes and overlapping
+visual signatures, where helpful contextual examples may
+compensate for limited supervision.
+Medical segmentation.We further experiment on ISIC-
+2017 [9], Kvasir-SEG [23], and DRIVE [46] to examine
+whether TACS can aid pixel-level predictions. These tasks
+evaluate if task-aligned retrieval supports spatial reasoning
+and fine boundary delineation.
+Evaluation Metrics.Performance is reported using met-
+rics standard to each task: For fine-grained classification,
+we follow [7], and report top-1 accuracy or mean per-class
+accuracy for each dataset. For medical classification tasks,
+we report quadratic Cohen’s Kappa for APTOS2019, accu-
+racy for Colorectal, ROC-AUC for DDSM, and Recall on
+ISIC 2019, following [19]. For medical segmentation, we
+report Dice coefficient and IoU.
+4.2. Implementation Details
+The Selector and Downstream Task Networks share a ViT-
+S/16 backbone. All models are initialized with DINOv3
+[44] pretrained weights and finetuned with AdamW opti-
+mizer [37]. The implementation of the downstream multi-
+input model varies depending on the task. For classifica-
+tion, we simply concatenate the patch embeddings of the
+main and the paired image before sending them to the trans-
+former blocks and finetune the whole model; For segmenta-
+tion, we freeze the pretrained backbone and append a gated
+cross-attention block [1, 33] to each transformer block, to
+enhance the main image features, and adopt a lightweight
+DPT head [41] to obtain the final segmentation. We set
+Gumbel-Softmax temperatureτ= 0.1and hybrid weight
+λ= 1.0by default. Training uses 100 epochs with cosine
+annealing learning rate scheduling. Batch size is 64 for clas-
+sification and 8 for segmentation. Images are resized to a
+resolution of256×256, and augmented with horizontal and
+vertical flips and random resize crops during training. All
+models are trained on a single NVIDIA A100 GPU. Each
+dataset follows its standard split, and results are averaged
+over three random seeds for robustness.
+Candidate Pool Construction.For each dataset (except for
+DRIVE due to small size), we sample20%of the training
+images to form a fixed candidate pool used during train-
+ing and evaluation. Query-associated images (e.g., from the
+same patient) are excluded across all pairing operations to
+prevent data leakage.
+4.3. Baselines
+We design baselines to progressively isolate the effect of
+task-aligned retrieval, ranging from no retrieval to fully
+learned selection:
+•No-Context:the model processes only the query image,
+without any contextual input.
+•Random Context Retrieval:a random candidate is
+paired with each query, representing retrieval without
+guidance.
+•Frozen DINO Similarity Retrieval :retrieval based on
+precomputed DINOv3 embeddings [51]; the retriever is
+frozen and non-learnable.
+•Feature-Averaged Context:soft aggregation of the top-
+kretrieved features into a continuous contextual represen-
+tation according to Eq. (2) (no reinforcement).
+4.4. Main Results
+Tab. 2 summarizes results across fine-grained and medi-
+cal classification datasets. Tab. 3 summarizes results on
+segmentation datasets. TACS consistently outperforms all
+baselines across domains and tasks, validating Hypothesis 1
+that Task-Aligned Context Selection generalizes widely.
+Fine-grained classification.Across 11 datasets, TACS im-
+proves accuracy by an average of +1.7% over the frozen
+retrieval baseline, with gains up to +2.6% on SUN397
+and +3.8% on CUB-200. The largest improvements oc-
+cur on SUN397 and CUB-200, datasets characterized by
+11636
+
+
+PAGE 6
+Table 2.Main resultson fine-grained and medical image classification benchmarks. Thebestresults are highlighted for each task.
+Aircr. Cal101 Cal256 C10 C100 CUB DTD Food Pets Cars SUN Avg. APTOS Col. DDSM ISIC Avg.
+mAcc↑mAcc↑mAcc↑Acc↑Acc↑Acc↑Acc↑Acc↑mAcc↑Acc↑Acc↑-↑ K ↑Acc↑AUC↑Rec↑-↑
+No-Context84.3 94.3 87.8 97.9 87.8 82.1 76.1 89.2 89.8 92.4 68.0 86.3 89.8 96.2 96.1 82.0 91.0
+Random Context Ret.82.8 94.2 86.3 97.6 87.6 82.1 74.6 89.3 90.0 92.3 69.0 86.0 89.8 96.8 96.3 83.5 91.6
+Frozen DINO Similarity Ret.85.1 94.7 87.3 97.8 88.4 81.4 75.4 89.9 90.3 93.0 69.2 86.6 90.4 97.0 96.1 84.5 92.0
+Feature-Averaged Context.85.3 94.3 87.4 97.8 88.6 82.6 76.3 90.5 90.7 93.2 66.7 86.7 90.2 97.5 96.6 84.2 92.1
+TACS (Ours)85.9 95.9 89.3 98.5 89.2 85.2 77.7 92.6 91.3 94.1 71.8 88.3 91.1 97.9 97.4 85.2 92.9
+Table 3.Main resultson medical segmentation benchmarks.
+DRIVE ISIC 2017 Kvasir-SEG
+Dice↑IoU↑Dice↑IoU↑Dice↑IoU↑
+No-Context 76.2 64.6 83.3 74.4 84.6 77.0
+Random Context Ret. 76.7 64.9 83.7 76.3 85.6 79.9
+Frozen DINO Similarity Ret. 77.5 64.8 84.4 76.0 86.3 80.0
+Feature-Averaged Context 77.6 64.8 84.5 75.6 86.4 79.8
+TACS (Ours)78.1 65.4 85.0 76.5 87.1 81.1
+high intra-class diversity and subtle inter-class boundaries.
+Here, similarity-based retrieval often reinforces redundancy
+by selecting near-duplicates (e.g., birds in similar poses or
+scenes under identical lighting), whereas TACS learns to
+retrieve complementary examples that expose discrimina-
+tive contrasts such as different postures, lighting, or spatial
+layouts, helping the model refine fine-grained its decision
+boundaries.
+Medical classification.Across medical classification tasks,
+TACS consistently outperforms all baselines, achieving an
+average gain of 0.9% over DINO similarity retrieval. The
+largest gain occurs on DDSM, where the learned selection
+policy provides +1.3% AUC improvement.
+Medical segmentation.Across DRIVE, ISIC-2017, and
+Kvasir-SEG, TACS consistently improves segmentation
+quality over all baselines, achieving up to +1.1 IoU on
+Kvasir-SEG. These gains reflect the model’s ability to re-
+trieve contextually informative examples that empirically
+benefit dense prediction tasks.
+4.5. Ablation Studies
+To test Hypothesis 2 (H2), that performance gains stem
+from learned, task-aligned retrieval, we conduct ablation
+experiments to isolate the effects of (a) contextual pairing
+and (b) the hybrid optimization components.
+Effect of contextual pairing.We compare TACS with sev-
+eral control settings that share identical architectures but
+differ in how contextual images are paired. Specifically, we
+replace learned retrieval with (i) no context image. (ii) an
+empty image, (iii) a duplicate of the query image, (iv) a
+noisy version of the query image, and (v) a static similarity-
+based retrieval using frozen DINOv3 embeddings (as in the
+main results). Results appear in Tab. 4. Across both natural
+and medical datasets, these alternatives produce smaller or
+inconsistent gains, demonstrating that improvements do not
+arise from simply concatenating more image tokens or from
+model capacity alone. Instead, performance scales with the
+informativenessof the retrieved image. Providing an empty
+context image or duplicating the query image as the context
+image has the same effect as not providing a context image
+at all, a loss of approximately 2% performance. Fixed sim-
+ilar image retrieval improves performance somewhat, but
+significantly less than TACS, where examples are empiri-
+cally proven more useful for the downstream task.
+Effect of optimization components.To assess the role of
+each optimization component, we ablate the differentiable
+and policy-based objectives of TACS. We test four variants:
+(a) a fixed retriever with frozen embeddings, (b) soft (dif-
+ferentiable) selection only, (c) hard (policy-based) selection
+only, and (d) the full dual-path model. Results in Tab. 5
+show that while each path individually improves over static
+retrieval, their combination yields the most stable and high-
+est performance across datasets. The differentiable sam-
+pling path provides smooth supervision during early train-
+ing, while the policy optimization path refines discrete se-
+lection decisions that maximize downstream reward. This
+confirms H2: performance gains stem from the learned,
+task-aligned selection process driven jointly by smooth gra-
+dient supervision and discrete reward feedback.
+4.6. Analysis and Interpretability
+Finally, we investigate Hypothesis 3 (H3): that the learned
+selection policy captures interpretable contextual relation-
+ships distinct from conventional similarity retrieval.
+Analysis of selection behavior.We analyze the distribution
+of selected pairs across class boundaries and visual simi-
+larity. Fig. 3 compares the class-overlap rate and LPIPS
+distance between the query and the retrieved example for
+DINO similarity and TACS. While similarity-based meth-
+ods overwhelmingly select near-duplicates, TACS increases
+cross-class selection rates by 40–70% and retrieves exam-
+ples with higher perceptual diversity. For instance, on the
+APTOS dataset, TACS often pairs mild and severe diabetic
+retinopathy cases, enabling the model to contrast lesion
+severity; on SUN397, it retrieves scenes in contrasting envi-
+ronments to clarify fine-grained boundaries. These findings
+indicate that the learned policy captures task-relevant com-
+plementarity rather than redundancy. LPIPS tells a similar
+11637
+
+
+PAGE 7
+Table 4. Ablations on methods for constructing context pairs. The context image is not provided, provided as a blank image, a duplicate of
+the query image, or a noisy version of the query image.
+Aircr. Cal101 Cal256 C10 C100 CUB DTD Food Pets Cars SUN APTOS Col. DDSM ISIC Avg.
+Context ImagemAcc↑mAcc↑mAcc↑Acc↑Acc↑Acc↑Acc↑Acc↑mAcc↑Acc↑Acc↑ K ↑Acc↑AUC↑Rec↑-↑
+No context image 84.3 94.3 87.8 97.9 87.8 82.1 76.1 89.2 89.8 92.4 68.0 89.8 96.2 96.1 82.0 87.6
+Blank Image 84.2 94.1 87.3 97.7 87.6 82.4 74.7 89.1 89.4 92.2 67.6 90.0 96.7 96.2 83.7 87.5
+Duplicate Query 84.1 94.1 87.0 97.9 87.4 82.6 75.9 89.3 89.9 92.4 67.5 89.9 96.6 96.4 83.9 87.7
+Noisy Query 84.4 94.4 87.2 97.6 88.1 82.6 75.6 89.3 89.6 92.5 67.8 89.8 96.8 96.5 84.2 87.8
+Similar image (DINOv3) 85.1 94.7 87.3 97.8 88.4 81.4 75.4 89.9 90.3 93.0 69.2 90.4 97.0 96.1 84.5 88.0
+TACS Context image85.9 95.9 89.3 98.5 89.2 85.2 77.7 92.6 91.3 94.1 71.8 91.1 97.9 97.4 85.2 89.5
+Table 5. Ablations on components of TACS.
+Method Fine-Grained Med Cls.
+Frozen DINO Similarity Ret. 86.6 92.0
+Differentiable selection (no policy) 86.7 92.1
+Policy-based selection (no Gumbel-Softmax) 87.2 92.4
+Full dual optimization (TACS) 88.3 92.9
+0 20 40 60 80 100
+DDSM
+APTOS
+DTD
+SUN
+Ours (%) DINOv3 Sim. (%)
+(a) Cross-class Selection Rate
+0 0.2 0.4 0.6 0.8 1
+DDSM
+APTOS
+DTD
+SUN
+Ours (LPIPS) DINOv3 Sim. (LPIPS) (b) LPIPS Loss
+Figure 3.Statistical analysis of selected context pairs.Compar-
+ison of cross-class selection rates and mean LPIPS distances for
+pairs chosen by different retrieval strategies. TACS consistently
+selects a higher proportion of cross-class and perceptually diverse
+(higher LPIPS) candidates than a fixed retriever, particularly on
+complex datasets such as DTD and SUN397. This indicates that
+the learned policy favorscomplementaryrather than merelysimi-
+larexamples, enabling richer contextual reasoning.
+story, where across all datasets retrieved images from TACS
+display less visual similarity to the query image than those
+retrieved according to DINO pretrained features.
+Qualitative visualization.Fig. 4 illustrates qualitative
+examples comparing similarity-based and task-aligned re-
+trieval across medical and natural domains. A consistent
+pattern emerges: the Selector and Task networks develop
+distinct yet complementary attention behaviors. The Selec-
+tor focuses on broad structural or contextual patterns such
+as vessel topology in retinal scans, breast structure in mam-
+mography, or geometric layout in scenes, while the Task
+network refines its attention to fine-grained, discriminative
+details within the query image. In medical datasets, the
+retrieved examples often highlight diagnostically relevant
+contrasts, such as a mass boundary or vascular abnormality
+that helps the classifier localize pathology more precisely.
+In fine-grained recognition, TACS retrieves semantically re-
+lated but visually contrasting images that clarify decision
+boundaries. For example, in SUN397, when the query de-
+picts an aquarium, TACS retrieves a window fac ¸ade—an
+image that shares planar reflections and glass textures yet
+exhibits the rigid framing and outdoor illumination absent
+in the query. This counterfactual pairing allows the model to
+reason contrastively, reinforcing its aquarium prediction by
+recognizing what distinguishing features aremissing. Sim-
+ilar cases are observed on Caltech-101 and DTD as well.
+Notably, TACS also selects similar samples when needed,
+such as identifying the dollar object. Overall, these results
+suggest that TACS learns to retrieve complementary, helpful
+examples, enabling the system to reason through structural
+analogy and contrast adaptively instead of mere similarity.
+5. Discussion
+H1: Generalization across tasks and domains.Across
+18 datasets spanning natural and medical imaging, TACS
+consistently improves performance over all baselines, val-
+idating its generality. The strongest gains appear in do-
+mains with high intra-class ambiguity and limited supervi-
+sion, such as CUB-200, SUN397, and DDSM. These results
+show that task-aligned retrieval is not domain-specific: the
+same mechanism that helps a model distinguish sceneries
+can also improve diagnostic precision in medical imaging.
+This demonstrates that learningwhat helpsis a transferable
+inductive bias that complements diverse tasks.
+H2: Gains stem from learned retrieval.Ablation stud-
+ies confirm that improvements arise from the task-aligned
+selection process itself rather than from additional parame-
+ters or data exposure. Both differentiable and policy-based
+optimization paths contribute complementary strengths: the
+former stabilizes early training by shaping continuous util-
+ity relationships, while the latter sharpens discrete decision
+boundaries through reward-based feedback. Together, these
+components enable TACS to select examples that mean-
+ingfully improve downstream accuracy—a capability static
+similarity-based methods lack.
+H3: Interpretable contextual reasoning.Visualizations
+of selector and classifier attention (Fig. 4) reveal a learned
+11638
+
+
+PAGE 8
+Figure 4. For each example, we show (1) the query image, (2) the TACS classifier’s attention on the query image (which also receives the
+selected context image), (3) the no-context classifier’s attention on the same image, (4) the context image selected by the Selector, and (5)
+the Selector’s attention on the selected image. TACS consistently focuses the classifier on more discriminative regions than the no-context
+model. The Selector attends to broad global structures, often choosing complementary rather than visually similar images (e.g., retrieving
+a piano to help disambiguate headphones), enabling the classifier to refine fine-grained decisions through contrasting contextual cues.
+division of labor: the Selector emphasizes global structure
+and contextual cues, while the Task model focuses on fine
+discriminative regions. In several cases, TACS resolves am-
+biguity by retrieving cross-class examples that clarify deci-
+sion boundaries—for instance, retrieving a window image
+when classifying an aquarium, helping the model recognize
+the absence of window frames and confirm the aquarium la-
+bel. This behavior suggests that TACS develops an implicit
+understanding of how contextual contrasts enhance recog-
+nition, offering a concrete form of interpretability grounded
+in task benefit rather than visual similarity.
+Broader implications.Task-aligned retrieval reframes how
+discriminative models use contextual data. Rather than
+treating retrieval as a preprocessing step, TACS integrates
+it into the reasoning process itself, allowing the model to
+dynamically identify which information improves its deci-
+sions. This insight connects to broader topics such as data
+curation, active learning, and visual reasoning, suggesting
+that learning to selecthelpfulexamples may serve as a uni-
+fying principle for adaptive visual intelligence.
+Limitations and future work.Current limitations include
+the reliance on a fixed candidate pool and the use of a sin-
+gle retrieved example per query. Extensions to video and
+multimodal decision-making are promising next steps.
+6. Conclusion
+We introduced Task-Aligned Context Selection (TACS),
+a framework that enables discriminative vision models to
+learn what helps. By jointly optimizing a Selector and
+Task network through a hybrid differentiable–policy objec-
+tive, TACS transforms context retrieval from a static simi-
+larity heuristic into a task-aligned inference module. Exper-
+iments across18datasets show consistent gains, especially
+in high-ambiguity and data-limited settings, and qualitative
+analyses reveal complementary retrieval strategies that dif-
+fer from nearest-neighbor baselines. This work opens a new
+direction for retrieval-augmented vision: using selective ex-
+ternal context as a learnable reasoning mechanism rather
+than a preprocessing step. Future work includes scaling to
+larger pools and extending task-aligned retrieval to broader
+vision reasoning pipelines.
+Acknowledgments.We acknowledge that this work was
+partially supported by the Wallenberg AI, Autonomous Sys-
+tems and Software Program (W ASP) funded by the Knut
+and Alice Wallenberg Foundation. The computations were
+enabled by the Berzelius resource provided by the Knut and
+Alice Wallenberg Foundation at the National Supercom-
+puter Centre and the National Academic Infrastructure for
+Supercomputing in Sweden (NAISS).
+11639
+
+
+PAGE 9
+References
+[1] Jean-Baptiste Alayrac, Jeff Donahue, Pauline Luc, Antoine
+Miech, Iain Barr, Yana Hasson, Karel Lenc, Arthur Men-
+sch, Katherine Millican, Malcolm Reynolds, et al. Flamingo:
+a visual language model for few-shot learning.Advances
+in neural information processing systems, 35:23716–23736,
+2022. 5
+[2] Mona Alzahrani, Muhammad Usman, Saeed Anwar, and
+Tarek Helmy. Selective multi-view deep model for 3d ob-
+ject classification. InProceedings of the ieee/cvf conference
+on computer vision and pattern recognition, pages 728–736,
+2024. 1
+[3] Akari Asai, Zeqiu Wu, Yizhong Wang, Avirup Sil, and
+Hannaneh Hajishirzi. Self-RAG: Learning to retrieve, gen-
+erate, and critique through self-reflection.arXiv preprint
+arXiv:2310.11511, 2023. 1, 2, 3
+[4] Andreas Blattmann, Robin Rombach, Kaan Oktay, Jonas
+M¨uller, and Bj ¨orn Ommer. Retrieval-augmented diffusion
+models.Advances in Neural Information Processing Sys-
+tems, 35:15309–15324, 2022. 2
+[5] Daniel Bolya, Po-Yao Huang, Peize Sun, Jang Hyun Cho,
+Andrea Madotto, Chen Wei, Tengyu Ma, Jiale Zhi, Jathushan
+Rajasegaran, Hanoona Rasheed, Junke Wang, Marco Mon-
+teiro, Hu Xu, Shiyu Dong, Nikhila Ravi, Daniel Li, Piotr
+Doll´ar, and Christoph Feichtenhofer. Perception encoder:
+The best visual embeddings are not at the output of the net-
+work.arXiv:2504.13181, 2025. 1
+[6] Lukas Bossard, Matthieu Guillaumin, and Luc Van Gool.
+Food-101–mining discriminative components with random
+forests. InEuropean conference on computer vision, pages
+446–461. Springer, 2014. 5
+[7] Ting Chen, Simon Kornblith, Mohammad Norouzi, and Ge-
+offrey Hinton. A simple framework for contrastive learning
+of visual representations. InInternational conference on ma-
+chine learning, pages 1597–1607. PmLR, 2020. 5
+[8] Mircea Cimpoi, Subhransu Maji, Iasonas Kokkinos, Sammy
+Mohamed, and Andrea Vedaldi. Describing textures in the
+wild. InProceedings of the IEEE conference on computer
+vision and pattern recognition, pages 3606–3613, 2014. 5
+[9] Noel CF Codella, David Gutman, M Emre Celebi, Brian
+Helba, Michael A Marchetti, Stephen W Dusza, Aadi
+Kalloo, Konstantinos Liopyris, Nabin Mishra, Harald Kit-
+tler, et al. Skin lesion analysis toward melanoma detection:
+A challenge at the 2017 international symposium on biomed-
+ical imaging (isbi), hosted by the international skin imaging
+collaboration (isic). In2018 IEEE 15th international sym-
+posium on biomedical imaging (ISBI 2018), pages 168–172.
+IEEE, 2018. 5
+[10] Marc Combalia, Noel CF Codella, Veronica Rotemberg,
+Brian Helba, Veronica Vilaplana, Ofer Reiter, Cristina Car-
+rera, Alicia Barreiro, Allan C Halpern, Susana Puig, et al.
+Bcn20000: Dermoscopic lesions in the wild.arXiv preprint
+arXiv:1908.02288, 2019. 5
+[11] Manuel Faysse, Hugues Sibille, Tony Wu, Bilel Omrani,
+Gautier Viaud, C ´eline Hudelot, and Pierre Colombo. Col-
+pali: Efficient document retrieval with vision language mod-
+els, 2024. 2
+[12] Li Fei-Fei, Rob Fergus, and Pietro Perona. Learning gener-
+ative visual models from few training examples: An incre-
+mental bayesian approach tested on 101 object categories. In
+2004 conference on computer vision and pattern recognition
+workshop, pages 178–178. IEEE, 2004. 5
+[13] Jingsheng Gao, Linxu Li, Ke Ji, Weiyuan Li, Yixin Lian,
+yuzhuo fu, and Bin Dai. SmartRAG: Jointly learn RAG-
+related tasks from the environment feedback. InThe Thir-
+teenth International Conference on Learning Representa-
+tions, 2025. 1, 2, 3
+[14] Gregory Griffin, Alex Holub, Pietro Perona, et al. Caltech-
+256 object category dataset. Technical report, Technical
+Report 7694, California Institute of Technology Pasadena,
+2007. 5
+[15] Jingyu Guo, Christos Matsoukas, Fredrik Strand, and Kevin
+Smith. Random token fusion for multi-view medical diag-
+nosis. InAdvancements In Medical Foundation Models: Ex-
+plainability, Robustness, Security, and Beyond, 2024. 1
+[16] Kelvin Guu, Kenton Lee, Zora Tung, Panupong Pasupat, and
+Mingwei Chang. Retrieval augmented language model pre-
+training. InProceedings of the 37th International Confer-
+ence on Machine Learning, pages 3929–3938. PMLR, 2020.
+2
+[17] Yunzhong Hou, Stephen Gould, and Liang Zheng. Learn-
+ing to select views for efficient multi-view understanding. In
+Proceedings of the IEEE/CVF Conference on Computer Vi-
+sion and Pattern Recognition, pages 20135–20144, 2024. 1
+[18] Ziniu Hu, Ahmet Iscen, Chen Sun, Zirui Wang, Kai-Wei
+Chang, Yizhou Sun, Cordelia Schmid, David A Ross, and
+Alireza Fathi. Reveal: Retrieval-augmented visual-language
+pre-training with multi-source multimodal knowledge mem-
+ory. InProceedings of the IEEE/CVF conference on com-
+puter vision and pattern recognition, pages 23369–23379,
+2023. 2, 3
+[19] Joana Pal ´es Huix, Adithya Raju Ganeshan, Johan Fredin
+Haslum, Magnus S¨oderberg, Christos Matsoukas, and Kevin
+Smith. Are natural domain foundation models useful for
+medical image classification? InProceedings of the
+IEEE/CVF winter conference on applications of computer
+vision, pages 7634–7643, 2024. 5
+[20] Gautier Izacard and Edouard Grave. Distilling knowledge
+from reader to retriever for question answering. InInterna-
+tional Conference on Learning Representations, 2021. 2, 3
+[21] Gautier Izacard, Patrick Lewis, Maria Lomeli, Lucas Hos-
+seini, Fabio Petroni, Timo Schick, Jane Dwivedi-Yu, Ar-
+mand Joulin, Sebastian Riedel, and Edouard Grave. Atlas:
+Few-shot learning with retrieval augmented language mod-
+els.Journal of Machine Learning Research, 24(251):1–43,
+2023. 3
+[22] Eric Jang, Shixiang Gu, and Ben Poole. Categorical
+reparameterization with gumbel-softmax. In5th Interna-
+tional Conference on Learning Representations, ICLR 2017,
+Toulon, France, April 24-26, 2017, Conference Track Pro-
+ceedings. OpenReview.net, 2017. 3
+[23] Debesh Jha, Pia H Smedsrud, Michael A Riegler, P ˚al
+Halvorsen, Thomas De Lange, Dag Johansen, and H˚avard D
+Johansen. Kvasir-seg: A segmented polyp dataset. InIn-
+11640
+
+
+PAGE 10
+ternational conference on multimedia modeling, pages 451–
+462. Springer, 2019. 5
+[24] Vladimir Karpukhin, Barlas Oguz, Sewon Min, Patrick SH
+Lewis, Ledell Wu, Sergey Edunov, Danqi Chen, and Wen-
+tau Yih. Dense passage retrieval for open-domain question
+answering. InEMNLP (1), pages 6769–6781, 2020. 1, 2
+[25] Karthik, Maggie, and Sohier Dane. Aptos 2019 blindness
+detection.https://kaggle.com/competitions/
+aptos2019-blindness-detection, 2019. Kaggle.
+5
+[26] Jakob Nikolas Kather, Cleo-Aron Weis, Francesco Bianconi,
+Susanne M Melchers, Lothar R Schad, Timo Gaiser, Alexan-
+der Marx, and Frank Gerrit Z¨ollner. Multi-class texture anal-
+ysis in colorectal cancer histology.Scientific reports, 6(1):
+1–11, 2016. 5
+[27] Jonathan Krause, Michael Stark, Jia Deng, and Li Fei-Fei.
+3d object representations for fine-grained categorization. In
+Proceedings of the IEEE international conference on com-
+puter vision workshops, pages 554–561, 2013. 5
+[28] Alex Krizhevsky, Geoffrey Hinton, et al. Learning multiple
+layers of features from tiny images, 2009. 5
+[29] Rebecca Sawyer Lee, Francisco Gimenez, Assaf Hoogi,
+Kanae Kawai Miyake, Mia Gorovoy, and Daniel L Rubin.
+A curated mammography data set for use in computer-aided
+detection and diagnosis research.Scientific data, 4(1):1–9,
+2017. 5
+[30] Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio
+Petroni, Vladimir Karpukhin, Naman Goyal, Heinrich
+K¨uttler, Mike Lewis, Wen-tau Yih, Tim Rockt ¨aschel, et al.
+Retrieval-augmented generation for knowledge-intensive nlp
+tasks.Advances in neural information processing systems,
+33:9459–9474, 2020. 1, 2
+[31] Xinze Li, Sen Mei, Zhenghao Liu, Yukun Yan, Shuo
+Wang, Shi Yu, Zheni Zeng, Hao Chen, Ge Yu, Zhiyuan
+Liu, et al. Rag-ddr: Optimizing retrieval-augmented gen-
+eration using differentiable data rewards.arXiv preprint
+arXiv:2410.13509, 2024. 2, 3
+[32] Yiwei Li, Yikang Liu, Jiaqi Guo, Lin Zhao, Zheyuan Zhang,
+Xiao Chen, Boris Mailhe, Ankush Mukherjee, Terrence
+Chen, and Shanhui Sun. Rau: Reference-based anatomical
+understanding with vision language models.arXiv preprint
+arXiv:2509.22404, 2025. 2
+[33] Long Lian, Yifan Ding, Yunhao Ge, Sifei Liu, Hanzi Mao,
+Boyi Li, Marco Pavone, Ming-Yu Liu, Trevor Darrell, Adam
+Yala, et al. Describe anything: Detailed localized image and
+video captioning.arXiv preprint arXiv:2504.16072, 2025. 5
+[34] Haotian Liu, Kilho Son, Jianwei Yang, Ce Liu, Jianfeng Gao,
+Yong Jae Lee, and Chunyuan Li. Learning customized visual
+models with retrieval-augmented knowledge. InProceedings
+of the IEEE/CVF Conference on Computer Vision and Pat-
+tern Recognition, pages 15148–15158, 2023. 2
+[35] Tian Liu, Huixin Zhang, Shubham Parashar, and Shu Kong.
+Few-shot recognition via stage-wise retrieval-augmented
+finetuning. InProceedings of the Computer Vision and Pat-
+tern Recognition Conference, pages 15086–15097, 2025. 2
+[36] Alexander Long, Wei Yin, Thalaiyasingam Ajanthan, Vu
+Nguyen, Pulak Purkait, Ravi Garg, Alan Blair, Chunhua
+Shen, and Anton Van den Hengel. Retrieval augmented clas-
+sification for long-tail visual recognition. InProceedings of
+the IEEE/CVF conference on computer vision and pattern
+recognition, pages 6959–6969, 2022. 2
+[37] Ilya Loshchilov and Frank Hutter. Decoupled weight decay
+regularization.arXiv preprint arXiv:1711.05101, 2017. 5
+[38] Subhransu Maji, Esa Rahtu, Juho Kannala, Matthew
+Blaschko, and Andrea Vedaldi. Fine-grained visual classi-
+fication of aircraft.arXiv preprint arXiv:1306.5151, 2013.
+5
+[39] Vishwesh Nath, Wenqi Li, Dong Yang, Andriy Myronenko,
+Mingxin Zheng, Yao Lu, Zhijian Liu, Hongxu Yin, Yee Man
+Law, Yucheng Tang, et al. Vila-m3: Enhancing vision-
+language models with medical expert knowledge. InPro-
+ceedings of the Computer Vision and Pattern Recognition
+Conference, pages 14788–14798, 2025. 1
+[40] Omkar M Parkhi, Andrea Vedaldi, Andrew Zisserman, and
+CV Jawahar. Cats and dogs. In2012 IEEE conference on
+computer vision and pattern recognition, pages 3498–3505.
+IEEE, 2012. 5
+[41] Ren ´e Ranftl, Alexey Bochkovskiy, and Vladlen Koltun. Vi-
+sion transformers for dense prediction. InProceedings of
+the IEEE/CVF international conference on computer vision,
+pages 12179–12188, 2021. 5
+[42] Zhengliang Shi, Lingyong Yan, Weiwei Sun, Yue Feng,
+Pengjie Ren, Xinyu Ma, Shuaiqiang Wang, Dawei Yin,
+Maarten de Rijke, and Zhaochun Ren. Direct retrieval-
+augmented optimization: Synergizing knowledge selection
+and language models.arXiv preprint arXiv:2505.03075,
+2025. 3
+[43] Hui Shuai, Lele Wu, and Qingshan Liu. Adaptive multi-view
+and temporal fusing transformer for 3d human pose estima-
+tion.IEEE Transactions on Pattern Analysis and Machine
+Intelligence, 45(4):4122–4135, 2022. 1
+[44] Oriane Sim ´eoni, Huy V . V o, Maximilian Seitzer, Federico
+Baldassarre, Maxime Oquab, Cijo Jose, Vasil Khalidov,
+Marc Szafraniec, Seungeun Yi, Micha ¨el Ramamonjisoa,
+Francisco Massa, Daniel Haziza, Luca Wehrstedt, Jianyuan
+Wang, Timoth´ee Darcet, Th´eo Moutakanni, Leonel Sentana,
+Claire Roberts, Andrea Vedaldi, Jamie Tolan, John Brandt,
+Camille Couprie, Julien Mairal, Herv ´e J ´egou, Patrick La-
+batut, and Piotr Bojanowski. DINOv3, 2025. 1, 5
+[45] Devendra Singh, Siva Reddy, Will Hamilton, Chris Dyer,
+and Dani Yogatama. End-to-end training of multi-document
+reader and retriever for open-domain question answering.
+Advances in Neural Information Processing Systems, 34:
+25968–25981, 2021. 2
+[46] Joes Staal, Michael D Abr `amoff, Meindert Niemeijer, Max A
+Viergever, and Bram Van Ginneken. Ridge-based vessel seg-
+mentation in color images of the retina.IEEE transactions
+on medical imaging, 23(4):501–509, 2004. 5
+[47] Philipp Tschandl, Cliff Rosendahl, and Harald Kittler. The
+ham10000 dataset, a large collection of multi-source der-
+matoscopic images of common pigmented skin lesions.Sci-
+entific data, 5(1):1–9, 2018. 5
+[48] Catherine Wah, Steve Branson, Peter Welinder, Pietro Per-
+ona, and Serge Belongie. The caltech-ucsd birds-200-2011
+dataset, 2011. 5
+11641
+
+
+PAGE 11
+[49] Jianxiong Xiao, James Hays, Krista A Ehinger, Aude Oliva,
+and Antonio Torralba. Sun database: Large-scale scene
+recognition from abbey to zoo. In2010 IEEE computer so-
+ciety conference on computer vision and pattern recognition,
+pages 3485–3492. IEEE, 2010. 5
+[50] Shi Yu, Chaoyue Tang, Bokai Xu, Junbo Cui, Junhao
+Ran, Yukun Yan, Zhenghao Liu, Shuo Wang, Xu Han,
+Zhiyuan Liu, et al. Visrag: Vision-based retrieval-augmented
+generation on multi-modality documents.arXiv preprint
+arXiv:2410.10594, 2024. 2
+[51] Lin Zhao, Xiao Chen, Eric Z Chen, Yikang Liu, Terrence
+Chen, and Shanhui Sun. Retrieval-augmented few-shot med-
+ical image segmentation with foundation models.IEEE
+Transactions on Neural Networks and Learning Systems,
+2025. 2, 5
+[52] Xu Zheng, Ziqiao Weng, Yuanhuiyi Lyu, Lutao Jiang, Hai-
+wei Xue, Bin Ren, Danda Paudel, Nicu Sebe, Luc Van Gool,
+and Xuming Hu. Retrieval augmented generation and under-
+standing in vision: A survey and new outlook.arXiv preprint
+arXiv:2503.18016, 2025. 1, 2
+11642

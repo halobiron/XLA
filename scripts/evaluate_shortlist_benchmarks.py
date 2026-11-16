@@ -242,7 +242,7 @@ def main():
             if identity_ids[context_ids.cpu()].eq(batch_identity.cpu()).any():
                 raise ValueError("Self retrieval")
             if pool_pixels is not None:
-                c = pool_pixels[chosen_positions]
+                c = pool_pixels[chosen_positions].to(dtype=q.dtype)
             else:
                 c = torch.stack([source[int(i)][0] for i in context_ids.cpu()]).to(device)
             output_logits["full_tacs"][j].append(full.task_model(q, c).cpu())

@@ -4,6 +4,20 @@ from torch import nn
 import torch.nn.functional as F
 
 
+class ResidualSelectorProjection(nn.Module):
+    """Identity-initialized nonlinear metric; explicit selector ablation."""
+
+    def __init__(self, dim):
+        super().__init__()
+        self.hidden = nn.Linear(dim, dim)
+        self.output = nn.Linear(dim, dim)
+        nn.init.zeros_(self.output.weight)
+        nn.init.zeros_(self.output.bias)
+
+    def forward(self, features):
+        return features + self.output(F.gelu(self.hidden(features)))
+
+
 class TACSSelector(nn.Module):
     """Generic selector independent of a specific DINOv3 API.
 

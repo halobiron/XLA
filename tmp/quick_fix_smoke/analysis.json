@@ -1,0 +1,199 @@
+{
+  "count": 64,
+  "half_A": 32,
+  "half_B": 32,
+  "references": {
+    "start_nc": {
+      "acc": 0.84375
+    },
+    "nc_cont": {
+      "acc": 0.84375
+    }
+  },
+  "models": {
+    "start_full": {
+      "query_only": {
+        "acc_all": 0.8125,
+        "diff_vs_nc_halfA_pp": -6.25,
+        "diff_vs_nc_halfB_pp": 0.0,
+        "halfB_ci95": [
+          -9.375,
+          9.375
+        ],
+        "diff_vs_nc_all_pp": -3.125
+      },
+      "nearest1": {
+        "acc_all": 0.8125,
+        "diff_vs_nc_halfA_pp": -3.125,
+        "diff_vs_nc_halfB_pp": -3.125,
+        "halfB_ci95": [
+          -9.375,
+          0.0
+        ],
+        "diff_vs_nc_all_pp": -3.125
+      },
+      "learned_argmax": {
+        "acc_all": 0.8125,
+        "diff_vs_nc_halfA_pp": -3.125,
+        "diff_vs_nc_halfB_pp": -3.125,
+        "halfB_ci95": [
+          -9.375,
+          0.0
+        ],
+        "diff_vs_nc_all_pp": -3.125
+      },
+      "max_confidence_of16": {
+        "acc_all": 0.84375,
+        "diff_vs_nc_halfA_pp": 0.0,
+        "diff_vs_nc_halfB_pp": 0.0,
+        "halfB_ci95": [
+          0.0,
+          0.0
+        ],
+        "diff_vs_nc_all_pp": 0.0
+      },
+      "min_entropy_of16": {
+        "acc_all": 0.84375,
+        "diff_vs_nc_halfA_pp": 0.0,
+        "diff_vs_nc_halfB_pp": 0.0,
+        "halfB_ci95": [
+          0.0,
+          0.0
+        ],
+        "diff_vs_nc_all_pp": 0.0
+      },
+      "mean_prob_top4": {
+        "acc_all": 0.828125,
+        "diff_vs_nc_halfA_pp": -3.125,
+        "diff_vs_nc_halfB_pp": 0.0,
+        "halfB_ci95": [
+          0.0,
+          0.0
+        ],
+        "diff_vs_nc_all_pp": -1.5625
+      },
+      "mean_prob_of16": {
+        "acc_all": 0.84375,
+        "diff_vs_nc_halfA_pp": 0.0,
+        "diff_vs_nc_halfB_pp": 0.0,
+        "halfB_ci95": [
+          0.0,
+          0.0
+        ],
+        "diff_vs_nc_all_pp": 0.0
+      },
+      "conf_weighted_of16": {
+        "acc_all": 0.84375,
+        "diff_vs_nc_halfA_pp": 0.0,
+        "diff_vs_nc_halfB_pp": 0.0,
+        "halfB_ci95": [
+          0.0,
+          0.0
+        ],
+        "diff_vs_nc_all_pp": 0.0
+      },
+      "ORACLE_same_class_DIAG": {
+        "acc_all": 0.828125,
+        "diff_vs_nc_halfA_pp": -3.125,
+        "diff_vs_nc_halfB_pp": 0.0,
+        "halfB_ci95": [
+          0.0,
+          0.0
+        ],
+        "diff_vs_nc_all_pp": -1.5625
+      }
+    },
+    "mix50": {
+      "query_only": {
+        "acc_all": 0.8125,
+        "diff_vs_nc_halfA_pp": -6.25,
+        "diff_vs_nc_halfB_pp": 0.0,
+        "halfB_ci95": [
+          -9.375,
+          9.375
+        ],
+        "diff_vs_nc_all_pp": -3.125
+      },
+      "nearest1": {
+        "acc_all": 0.828125,
+        "diff_vs_nc_halfA_pp": -3.125,
+        "diff_vs_nc_halfB_pp": 0.0,
+        "halfB_ci95": [
+          -9.375,
+          9.375
+        ],
+        "diff_vs_nc_all_pp": -1.5625
+      },
+      "learned_argmax": {
+        "acc_all": 0.8125,
+        "diff_vs_nc_halfA_pp": -3.125,
+        "diff_vs_nc_halfB_pp": -3.125,
+        "halfB_ci95": [
+          -9.375,
+          0.0
+        ],
+        "diff_vs_nc_all_pp": -3.125
+      },
+      "max_confidence_of16": {
+        "acc_all": 0.84375,
+        "diff_vs_nc_halfA_pp": 0.0,
+        "diff_vs_nc_halfB_pp": 0.0,
+        "halfB_ci95": [
+          0.0,
+          0.0
+        ],
+        "diff_vs_nc_all_pp": 0.0
+      },
+      "min_entropy_of16": {
+        "acc_all": 0.828125,
+        "diff_vs_nc_halfA_pp": -3.125,
+        "diff_vs_nc_halfB_pp": 0.0,
+        "halfB_ci95": [
+          0.0,
+          0.0
+        ],
+        "diff_vs_nc_all_pp": -1.5625
+      },
+      "mean_prob_top4": {
+        "acc_all": 0.84375,
+        "diff_vs_nc_halfA_pp": 0.0,
+        "diff_vs_nc_halfB_pp": 0.0,
+        "halfB_ci95": [
+          0.0,
+          0.0
+        ],
+        "diff_vs_nc_all_pp": 0.0
+      },
+      "mean_prob_of16": {
+        "acc_all": 0.84375,
+        "diff_vs_nc_halfA_pp": 0.0,
+        "diff_vs_nc_halfB_pp": 0.0,
+        "halfB_ci95": [
+          0.0,
+          0.0
+        ],
+        "diff_vs_nc_all_pp": 0.0
+      },
+      "conf_weighted_of16": {
+        "acc_all": 0.84375,
+        "diff_vs_nc_halfA_pp": 0.0,
+        "diff_vs_nc_halfB_pp": 0.0,
+        "halfB_ci95": [
+          0.0,
+          0.0
+        ],
+        "diff_vs_nc_all_pp": 0.0
+      },
+      "ORACLE_same_class_DIAG": {
+        "acc_all": 0.84375,
+        "diff_vs_nc_halfA_pp": 0.0,
+        "diff_vs_nc_halfB_pp": 0.0,
+        "halfB_ci95": [
+          0.0,
+          0.0
+        ],
+        "diff_vs_nc_all_pp": 0.0
+      }
+    }
+  }
+}
