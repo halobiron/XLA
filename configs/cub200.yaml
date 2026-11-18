@@ -1,0 +1,60 @@
+experiment:
+  name: cub200_full_tacs
+  seed: 42
+  mode: full_tacs
+  deviations:
+    - Local starter configuration; not an exact paper reproduction or a validated winning recipe
+    - Batch size 4 instead of paper 64, for 16 GB VRAM
+    - 8 uniformly sampled candidates per query instead of full-pool selection
+    - Validation carved from official training split for checkpoint selection
+    - Horizontal pair RoPE is a project choice not specified by the paper
+    - lambda_policy 1.0 follows AGENTS.md; paper section 4.2 specifies 0.5
+
+data:
+  dataset: cub200
+  root: ./data/CUB_200_2011
+  num_classes: 200
+  image_size: 256
+  candidate_pool_ratio: 0.20
+  candidates_per_query: 8
+  validation_ratio: 0.10
+  num_workers: 0
+
+backbone:
+  name: dinov3_vits16
+  repo_dir: ./third_party/dinov3
+  weights: ./checkpoints/dinov3_vits16_pretrain_lvd1689m-08c60483.pth
+  freeze: false
+  unfreeze_last_n_blocks: 0
+  share_selector_backbone: true
+  pair_rope_layout: horizontal
+
+selector:
+  projection: false
+  tau: 0.1
+  abstain_gate: false     # TACS-X anchored extension; paper: always uses context
+
+policy:
+  lambda_policy: 1.0
+  aux_query_weight: 0.0   # TACS-X anchored extension; paper: query-only path untrained
+
+topk:
+  k: 2
+  adaptive_threshold: 0.90
+
+training:
+  epochs: 100
+  batch_size: 4
+  lr_head: 3.0e-4
+  lr_selector: 1.0e-4
+  lr_backbone: 1.0e-5
+  lr_gate: 1.0e-3   # only used when selector.abstain_gate is true
+  weight_decay: 0.05
+  scheduler: cosine
+  amp: true
+
+evaluation:
+  selection: argmax
+
+output:
+  root: ./outputs

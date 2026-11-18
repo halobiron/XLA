@@ -12,7 +12,7 @@ Exit: `pytest -q` passes.
 ## Phase 1 — No-Context baseline
 
 Implement:
-- CIFAR-100 loader;
+- CUB-200-2011 loader using the official split;
 - DINOv3 adapter;
 - query-only classifier;
 - train/eval loop;

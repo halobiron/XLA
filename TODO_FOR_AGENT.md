@@ -1,34 +1,24 @@
-# Coding Agent TODO
+# Current work ? CUB-200-2011
 
-## P0
-- [x] Bootstrap official DINOv3.
-- [x] Complete `DINOv3Adapter`.
-- [x] Implement `DualInputViT`.
-- [x] Implement CIFAR-100 + fixed candidate-pool wrapper.
-- [x] Implement No-Context train/eval.
-- [x] Implement DINO similarity baseline.
-- [x] Implement config/CLI.
-- [x] Implement checkpoints + metrics logging.
-
-## P1
-- [x] Gumbel-only mode.
-- [x] Policy-only mode.
-- [x] Full TACS mode.
-- [x] Verify reward detach and gradient flow.
-- [x] Selected-pair CSV.
-- [x] Ablation runner.
-
-## P2
-- [x] Cross-class selection analysis.
-- [x] Retrieval-pair visualization.
-- [x] Top-K extension.
-- [x] Adaptive-K extension.
-- [x] Gradio demo.
-
-## Before finalizing
-- [x] All tests pass.
-- [x] Smoke train every required mode.
-- [x] Update implementation decisions.
-- [x] Add exact commands to README.
-- [x] Generate result summary from real runs (requires official DINOv3 weights).
-- [ ] Never fabricate paper-matching numbers.
+- [x] Retire old CIFAR training data, runs, dedicated scripts and tests.
+- [x] Keep official DINOv3 weights and reusable TACS components.
+- [x] Read official CUB metadata, preserve the official held-out split.
+- [x] Use 200 task classes and a training-only candidate pool.
+- [x] Default to validation-only evaluation, with explicit test opt-in.
+- [x] Verify official archive MD5, extract CUB_200_2011.tgz and check all 11,788 image paths (5,994 train / 5,794 test).
+- [x] Validate real full-pool GPU forward/backward; Gumbel and policy score gradients finite, peak VRAM 2.48 GiB.
+- [x] Lock a matched six-epoch maximum budget with an epoch3 futility gate, seed42, validation only.
+- [x] Run CUB pilot: stopped at epoch3; No-Context75.59%, TACS72.22%, difference -3.37pp (descriptive95% CI[-5.89,-0.84]). See outputs/cub200_fullpool_pilot_s42_v1/comparison.json. No test evaluation; no win established.
+- [x] Frozen CUB epoch3 diagnostic on all594 validation queries: selector72.22%, No-Context75.59%, mean-probability16 contexts70.37%; diagnostic any-correct16 upper bound83.00% (53 baseline errors repairable,9 baseline-correct queries wrong with all16). Oracle uses validation labels and is not a deployable model. See outputs/cub200_quick_warmstart_s42_v1/oracle.json.
+- [x] Quick CUB warm-start check: parent No-Context epoch3 +2 query-only epochs; identical warm-start for both arms, then4 matched continuation epochs, seed42, full1080-image training pool,224px,batch16. Fixed final validation: No-Context84.34%, TACS81.31%, difference-3.03pp (descriptive95% CI[-4.88,-1.18]);8 fixed,26 broken. Original input/checkpoint hashes unchanged; official-test image guard recorded zero forbidden attempts. See outputs/cub200_quick_warmstart_s42_v1/comparison.json. This is not the proposed20-epoch continuation or a test of region-based context selection; no warm-start win established.
+- [x] Review historical CIFAR experiments before proposing repeats: git show a8c01bd:README.md and historical docs/BASELINE_COMPARISON.md, docs/TACS_SHARED_BACKBONE_K4_RESULT.md, docs/EXPERIMENT_STATUS.md. Warm-start/full fine-tuning, shared-backbone K4, residual correction, utility/null selector and Top-K were already explored. Clean matched CIFAR test: TACS90.01% vs No-Context90.22%; residual context87.98% vs same-size query-only88.01%; noisy utility validation72.35% vs72.33%. The positive shared-K4 Gaussian endpoint(+0.736pp) is narrow exploratory robustness evidence, not a clean-image win.
+- [x] Frozen oracle on CURRENT CUB final continuation-epoch4/absolute-epoch9 checkpoints: No-Context84.34%, selector81.31%, internal query-only81.82%, mean-probability16 contexts81.82%. Diagnostic min-CE16=88.72%; exact any-correct16 bound88.89%, +4.55pp vs matched baseline (descriptive95% CI[+2.86,+6.40]),29 baseline errors repairable,2 baseline-correct queries wrong with all16. All594 saved baseline/selector predictions reconstructed exactly; zero optimizer steps; original hashes unchanged; no test image access. See outputs/cub200_final_oracle_s42_v1/oracle.json. This establishes useful context exists within the16 selector proposals for this frozen classifier, NOT that a label-free selector can attain the oracle or that model fusion needs no improvement.
+- [x] Actually train CUB selector heads on frozen current task model:2400 identity-safe train queries(clean+fixed augmentation=4800 cases),600 separate train-holdout queries, unchanged1080 training-pool images,16 proposals. Fit all4 fixed heads for40 epochs each; choose epochs/primary on train holdout before loading final validation predictions. Validation594: cosine metric82.15%, utility16=82.83%, statistics16=82.32%, utility17 fallback84.34%(all queries choose independent No-Context; primary train-holdout selection epoch0). No-Context84.34%, originalTACS81.31%, min-entropy16 control82.83%. Utility16 minus No-Context=-1.52pp, descriptive95% CI[-3.54,+0.51]; no learned-selector win. Original input hashes unchanged, task weights frozen, no test images;58 CPU tests passed. See outputs/cub200_selector_learning_s42_v1/result.json and learning_diagnostics.json. This was second-stage enumerated-CE utility supervision, not original hybrid optimization or a matched-budget architecture win.
+- [x] Test a different downstream extension rather than repeat the global-feature residual: frozen84.34% No-Context query encoder/logits plus zero-initialized attention correction over native DINO patch tokens. Matched query-patch-only/context-patch heads, same parameters/query views/optimizer,20 epochs each; fixed original TACS top1 context from train pool. Both train-holdout selections chose epoch0: all validation accuracies84.34%, zero context gain. Learned later epochs reduced train-holdout accuracy despite lower NLL; did not select epochs on validation. See outputs/cub200_patch_context_s42_v1/result.json. This is an explicit TACS-X architectural deviation (not pre-block two-image concatenation or hybrid TACS); original checkpoints unchanged, no test access,61 CPU tests pass.
+- [x] Implement anchored TACS-X (explicit extension; both flags off by default): `policy.aux_query_weight` trains the query-only reward baseline; `selector.abstain_gate` lets a per-query gate on detached, label-free features fall back to query-only at inference. The gate is trained only by |reward|-weighted BCE. A global null-offset option collapsed to all-null in smoke tests and was removed. 73 CPU tests pass.
+- [x] GPU smoke v3, full 1080-image pool, batch 16, 300 steps per variant from the absolute-epoch-5 warm start, first 256 validation queries (mechanics only, not a result). Paper TACS: forced context 78.91%. Aux-only: 82.03%. Aux+gate: forced context 81.64%, gated 80.47%, query-only chosen for 60.5% of queries, gate correct on only 5/13 disagreements. Step time 0.27 vs 0.32 s; VRAM 2.65 vs 3.25 GiB. Zero test-image opens; warm start unchanged. See outputs/cub200_anchored_smoke_s42_v3/smoke.json.
+- [x] Local development readiness run (seed 42, scripts/run_cub_anchored.py, warm-up 5 + 15 epochs, full pool, validation only; go/no-go criteria written before training in outputs/cub200_anchored_dev_s42/readiness_criteria.json). Validation-selected: No-Context 86.36% (epoch 12); paper TACS forced context 84.18% (-2.19pp, CI [-3.87,-0.51]), query-only 82.66%; anchored TACS forced context 85.02% (-1.35pp, CI [-3.03,+0.17]), query-only 85.02%, gated 85.02%. The gate returned query-only on every epoch (gated == query-only throughout). Anchoring recovered most of the query-only damage (+2.4pp versus paper TACS) and beat paper TACS by +0.84pp, but context added 0pp net and the gap to No-Context did not close in the last 3 epochs. Result: NO-GO, no Kaggle confirmatory run issued. Zero test-image opens. The Kaggle bundle builder (scripts/package_kaggle_cub_anchored.py) and cell (scripts/kaggle_cub_anchored_cell.py) are ready but unused.
+- [x] Corruption probe (validation only, no training, seed-42 dev checkpoints; corrupted query, clean pool). Protocol and go rule were written to outputs/cub200_anchored_dev_s42/corruption_probe/probe_registration.json before evaluation. Primary endpoint (mean over Gaussian noise 0.08/0.16), anchored forced context minus No-Context: -4.46pp, CI [-6.57,-2.44] → NO-GO. Retrieval driven by the corrupted query picks misleading contexts (anchored noise 0.16: forced context 56.23% vs own query-only 60.61% vs No-Context 64.65%). The paper-TACS context beats its own weakened query path but not No-Context. Zero test-image opens. Do not cherry-pick a single positive secondary condition after the fact.
+- [x] Low-data dev readiness run (5 training images per class = 1000, pool = that subset; seed 42; warm-up 5 + 30 epochs; validation only; criteria in outputs/cub200_lowdata5_dev_s42/readiness_criteria.json, written before training). Validation-selected: No-Context 72.56% (epoch 29). Anchored forced context 72.39% (-0.17pp, CI [-2.53,+2.19], 24 fixed / 25 broken); its own query-only path 70.37%, so context gives +2.0pp relative to its own query path, the first positive context contribution. Paper TACS forced context 71.72% (-0.84pp). The gate is harmful (gated = query-only = 70.37%): trained on fitted training queries it always abstains. Result: NO-GO under the pre-registered +0.5pp rule. Trend: anchored forced context led No-Context at epochs 5-20 (e.g. epoch 5: 61.1% vs 56.7%; epoch 20: 71.9% vs 71.4%); No-Context caught up by epoch 25-30.
+- [x] Low-data K=3 / K=2 dev runs (seed 42; warm-up 5 + 50 / 75 epochs, about 1900 steps each; No-Context + anchored; criteria in outputs/cub200_lowdata_k23_criteria/readiness_criteria.json, written before training). K=3: No-Context 65.32%, anchored forced context 64.98% (-0.34pp, CI [-2.53,+1.85]) → NO-GO. K=2: No-Context 55.39%, anchored forced context 57.58% (+2.19pp, CI [-0.67,+5.05], 43 fixed / 30 broken); No-Context plateaued (last-5 gain -0.17pp) → GO. Caveats: at K=2 the anchored model's own query-only path is already 57.24% (+1.85pp), so most of the gain comes from anchored dual-image training, with context adding about +0.3pp. Five regimes were explored on one validation set (full -1.35, corruption -4.46, K5 -0.17, K3 -0.34, K2 +2.19) and the effect is non-monotonic in K; expect regression to the mean.
+- [ ] Confirmatory Kaggle run: K=2, fresh seeds 0-3, No-Context vs anchored, official test once (bundle outputs/kaggle/tacsx_cub_anchored.zip + CUB_200_2011.tgz; cell scripts/kaggle_cub_anchored_cell.py). Report it whatever the outcome, together with every explored regime.

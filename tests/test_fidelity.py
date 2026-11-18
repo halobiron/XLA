@@ -175,10 +175,22 @@ def test_task_head_initialization_matches_across_baseline_and_learned_modes(monk
     assert torch.equal(baseline.task_model.head.bias, learned.task_model.head.bias)
 
 
-def test_data_order_is_independent_of_model_rng_and_context_mode(monkeypatch):
-    from tacsx.data import cifar100
+def test_cub_classifier_has_200_classes_and_shared_trainable_backbone(monkeypatch):
+    from tacsx import cli
+    monkeypatch.setattr(cli, "DINOv3Adapter", lambda *args, **kwargs: DummyEncoder())
+    cfg = {"backbone": {"weights": "dummy", "repo_dir": "dummy", "share_selector_backbone": True},
+           "data": {"num_classes": 200}, "selector": {"projection": False}, "policy": {}}
+    model = cli.build_model(cfg, False)
+    assert model.task_model.head.out_features == 200
+    assert model.selector.encoder is model.task_model.backbone
+    assert all(p.requires_grad for p in model.selector.encoder.parameters())
 
-    class FakeCIFAR:
+
+def test_data_order_is_independent_of_model_rng_and_context_mode():
+    from torch.utils.data import DataLoader
+    from tacsx.data import ContextDataset, FixedCandidatePool, PoolItem
+
+    class FakeImages:
         def __init__(self, *args, **kwargs):
             self.targets = list(range(20))
 
@@ -188,10 +200,11 @@ def test_data_order_is_independent_of_model_rng_and_context_mode(monkeypatch):
         def __getitem__(self, index):
             return torch.full((3, 4, 4), float(index)), self.targets[index]
 
-    monkeypatch.setattr(cifar100.datasets, "CIFAR100", FakeCIFAR)
     def order(include_context):
-        train, _, _, _ = cifar100.make_cifar100_loaders(
-            "dummy", 4, .2, 2, 4, 0, 42, include_context=include_context)
+        base = FakeImages()
+        pool = FixedCandidatePool([PoolItem(i, i) for i in range(4)], 42)
+        dataset = ContextDataset(base, base, pool, 2, 42, include_context=include_context)
+        train = DataLoader(dataset, batch_size=4, shuffle=True, generator=torch.Generator().manual_seed(42))
         return torch.cat([batch["query_id"] for batch in train])
     first = order(False)
     torch.randn(1000)  # Represents extra backbone construction or policy sampling.

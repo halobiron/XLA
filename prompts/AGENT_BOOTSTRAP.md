@@ -8,7 +8,7 @@ Before coding:
 2. Read `PROJECT_SPEC.md`.
 3. Read `docs/PAPER_NOTES.md`.
 4. Read `docs/IMPLEMENTATION_PLAN.md`.
-5. Read `docs/EXPERIMENT_MATRIX.md`.
+5. Read `configs/cub200.yaml` and its recorded deviations.
 6. Inspect `paper/TACS_CVPR_2026.pdf`.
 7. Inspect the official DINOv3 repository after bootstrap.
 
@@ -23,6 +23,6 @@ Then:
 - log paper ambiguities in `docs/IMPLEMENTATION_DECISIONS.md`.
 
 First milestone:
-- No-Context CIFAR-100 end-to-end;
+- No-Context CUB-200-2011 end-to-end;
 - then static DINO retrieval;
 - only then learned selection.

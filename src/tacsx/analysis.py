@@ -23,8 +23,8 @@ def render_pairs(query_dataset, candidate_dataset, pairs_csv: str, output_dir: s
     """Render selected query/context pairs using their datasets' global ID mapping.
 
     `query_id_offset` maps a global query ID in the metadata to the local query
-    dataset index. CIFAR-100 test metadata, for example, starts at 50,000 while
-    the test dataset itself is indexed from zero.
+    dataset index. CUB metadata uses a single global row index for both splits,
+    so supplying the complete CUB image dataset needs no offset.
     """
     with open(pairs_csv, encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))

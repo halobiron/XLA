@@ -81,12 +81,17 @@ def _set_training_mode(model):
 def train_epoch(model, loader, optimizer, mode, device, lambda_policy, scaler=None, show_progress=False, dino_cache=None):
     _set_training_mode(model)
     total_loss = total_correct = total = 0
+    null_count = 0
     log_every = max(1, len(loader) // 10)
     for step, batch in enumerate(loader, start=1):
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(device_type=device.type, enabled=scaler is not None):
             out, _, _, labels = execute(model, mode, batch, device, dino_cache=dino_cache, candidate_dataset=loader.dataset)
             loss = out.task_loss + lambda_policy * out.policy_loss
+            if out.aux_loss is not None:
+                loss = loss + out.aux_loss
+            if out.gate_loss is not None:
+                loss = loss + out.gate_loss
         if not torch.isfinite(loss): raise FloatingPointError("non-finite training loss")
         if scaler:
             scaler.scale(loss).backward(); scaler.step(optimizer); scaler.update()
@@ -94,17 +99,22 @@ def train_epoch(model, loader, optimizer, mode, device, lambda_policy, scaler=No
             loss.backward(); optimizer.step()
         total_loss += loss.detach().item() * labels.numel()
         total_correct += (out.logits.argmax(1) == labels).sum().item(); total += labels.numel()
+        if out.null_selected is not None: null_count += int(out.null_selected.sum())
         if show_progress and (step == 1 or step % log_every == 0 or step == len(loader)):
             print(f"  train batch {step}/{len(loader)}: loss={total_loss / total:.4f} acc={total_correct / total:.4f}", flush=True)
-    return {"loss": total_loss / total, "accuracy": total_correct / total}
+    result = {"loss": total_loss / total, "accuracy": total_correct / total}
+    if getattr(model, "abstain_gate", False):
+        result["null_rate"] = null_count / total
+    return result
 
 
 @torch.no_grad()
 def evaluate(model, loader, mode, device, collect_pairs=False, dino_cache=None):
-    model.eval(); total_loss = total_correct = total = 0; pairs = []; entropies = []; rewards = []
+    model.eval(); total_loss = total_correct = total = 0; pairs = []; entropies = []; rewards = []; nulls = []
     for batch in loader:
         out, query, candidates, labels = execute(model, mode, batch, device, dino_cache=dino_cache, candidate_dataset=loader.dataset)
         total_loss += out.task_loss.item() * labels.numel(); total_correct += (out.logits.argmax(1) == labels).sum().item(); total += labels.numel()
+        if out.null_selected is not None: nulls.extend(out.null_selected.cpu().tolist())
         if out.scores.numel():
             probs = out.scores.softmax(-1); chosen = out.scores.argmax(-1) if out.action is None else out.action
             entropies.extend((-(probs * probs.clamp_min(1e-12).log()).sum(-1)).cpu().tolist())
@@ -113,7 +123,18 @@ def evaluate(model, loader, mode, device, collect_pairs=False, dino_cache=None):
                 ctx = out.context if out.context is not None else candidates[b, chosen]
                 cos = F.cosine_similarity(query.flatten(1), ctx.flatten(1)).cpu().tolist()
                 chosen_cpu = chosen.detach().cpu()
+                null_cpu = (out.null_selected.cpu() if out.null_selected is not None
+                            else torch.zeros(labels.shape[0], dtype=torch.bool))
                 for i in range(labels.shape[0]):
+                    if null_cpu[i]:
+                        # Anchored extension: query-only prediction, no context image.
+                        pairs.append({"query_id": int(batch["query_id"][i]), "query_label": int(labels[i]),
+                                      "candidate_id": -1, "candidate_label": -1, "similarity": "",
+                                      "selection_score": float(out.scores[i, chosen[i]]),
+                                      "reward": float(out.reward[i]) if out.reward is not None else "",
+                                      "topk_candidate_ids": "", "topk_candidate_labels": "", "topk_weights": "",
+                                      "effective_k": 0, "cross_class_weight": "", "null_context": True})
+                        continue
                     pair = {"query_id": int(batch["query_id"][i]), "query_label": int(labels[i]),
                             "candidate_id": int(batch["candidate_ids"][i, chosen_cpu[i]]),
                             "candidate_label": int(batch["candidate_labels"][i, chosen_cpu[i]]),
@@ -145,14 +166,18 @@ def evaluate(model, loader, mode, device, collect_pairs=False, dino_cache=None):
                         pair["topk_weights"] = ""
                         pair["effective_k"] = 1
                         pair["cross_class_weight"] = float(pair["candidate_label"] != int(labels[i]))
+                    pair["null_context"] = False
                     pairs.append(pair)
         if out.reward is not None: rewards.extend(out.reward.cpu().tolist())
     result = {"avg_loss": total_loss / total, "accuracy": total_correct / total,
               "mean_selection_entropy": float(np.mean(entropies)) if entropies else None,
               "mean_reward": float(np.mean(rewards)) if rewards else None}
-    if pairs:
-        result["cross_class_rate"] = float(np.mean([x["cross_class_weight"] for x in pairs]))
-        result["mean_query_context_cosine"] = float(np.mean([x["similarity"] for x in pairs]))
+    if nulls:
+        result["null_rate"] = float(np.mean(nulls))
+    context_pairs = [x for x in pairs if not x["null_context"]]
+    if context_pairs:
+        result["cross_class_rate"] = float(np.mean([x["cross_class_weight"] for x in context_pairs]))
+        result["mean_query_context_cosine"] = float(np.mean([x["similarity"] for x in context_pairs]))
     return result, pairs
 
 

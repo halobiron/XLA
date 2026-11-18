@@ -39,7 +39,9 @@ The paper standardizes reward in-batch and applies a REINFORCE-style policy loss
 L_TACS = L_grad + lambda * L_policy
 ```
 
-Paper default: `lambda = 1.0`.
+Paper section 4.2 specifies `lambda = 0.5`. The repository's `AGENTS.md`
+requires `lambda_policy = 1.0` unless intentionally changed. The CUB starter
+config retains 1.0 and records this difference; it is not the paper default.
 
 ## Classification architecture
 

@@ -7,7 +7,7 @@ import yaml
 import torch
 from torch import optim
 
-from .data import make_cifar100_loaders
+from .data import make_cub200_loaders
 from .engine import cache_dino_candidate_embeddings, evaluate, save_run, set_seed, train_epoch
 from .models.dinov3_adapter import DINOv3Adapter
 from .models.dual_input_vit import DualInputViT
@@ -42,20 +42,25 @@ def param_groups(model, training_cfg: dict):
     Previously every trainable parameter used lr_head, so an unfrozen DINOv3 was
     updated at 3e-4 and lost its pretrained features.
     """
-    groups = {"backbone": [], "selector": [], "head": []}
+    groups = {"backbone": [], "selector": [], "head": [], "gate": []}
     for name, p in model.named_parameters():
         if not p.requires_grad:
             continue
         if name.startswith("task_model.backbone.") or name.startswith("selector.encoder."):
             groups["backbone"].append(p)
+        elif name.startswith("gate."):
+            # Abstain gate: tiny MLP on detached features, own LR, no decay.
+            groups["gate"].append(p)
         elif name.startswith("selector."):
             groups["selector"].append(p)
         else:
             groups["head"].append(p)
     lrs = {"backbone": float(training_cfg.get("lr_backbone", 1e-5)),
            "selector": float(training_cfg.get("lr_selector", 1e-4)),
-           "head": float(training_cfg["lr_head"])}
-    return [{"params": ps, "lr": lrs[k], "name": k} for k, ps in groups.items() if ps]
+           "head": float(training_cfg["lr_head"]),
+           "gate": float(training_cfg.get("lr_gate", 1e-3))}
+    return [{"params": ps, "lr": lrs[k], "name": k, **({"weight_decay": 0.0} if k == "gate" else {})}
+            for k, ps in groups.items() if ps]
 
 
 def build_model(cfg, allow_random_backbone: bool, include_selector: bool = True):
@@ -69,30 +74,39 @@ def build_model(cfg, allow_random_backbone: bool, include_selector: bool = True)
     task_adapter = DINOv3Adapter(back["repo_dir"], **kwargs)
     _freeze(task_adapter, back.get("freeze", False), int(back.get("unfreeze_last_n_blocks", 0)))
     # Extra selector initialization must not change the baseline's head seed.
-    task = DualInputViT(task_adapter, 100)
+    task = DualInputViT(task_adapter, int(cfg.get("data", {}).get("num_classes", 200)))
     if not include_selector:
         return TACSClassifier(None, task, tau=float(cfg["selector"].get("tau", .1)), lambda_policy=float(cfg["policy"].get("lambda_policy", 1.0)))
 
-    selector_adapter = DINOv3Adapter(back["repo_dir"], **kwargs)
-    _freeze(selector_adapter, back.get("freeze", False), int(back.get("unfreeze_last_n_blocks", 0)))
+    if back.get("share_selector_backbone", False):
+        selector_adapter = task_adapter
+    else:
+        selector_adapter = DINOv3Adapter(back["repo_dir"], **kwargs)
+        _freeze(selector_adapter, back.get("freeze", False), int(back.get("unfreeze_last_n_blocks", 0)))
     selector = TACSSelector(selector_adapter, projection=cfg["selector"].get("projection", True))
     topk = cfg.get("topk", {})
-    return TACSClassifier(selector, task, tau=float(cfg["selector"].get("tau", .1)), lambda_policy=float(cfg["policy"].get("lambda_policy", 1.0)), topk_k=int(topk.get("k", 2)), adaptive_threshold=float(topk.get("adaptive_threshold", .9)), eval_selection=cfg.get("evaluation", {}).get("selection", "argmax"))
+    return TACSClassifier(selector, task, tau=float(cfg["selector"].get("tau", .1)), lambda_policy=float(cfg["policy"].get("lambda_policy", 1.0)), topk_k=int(topk.get("k", 2)), adaptive_threshold=float(topk.get("adaptive_threshold", .9)), eval_selection=cfg.get("evaluation", {}).get("selection", "argmax"),
+                          aux_query_weight=float(cfg["policy"].get("aux_query_weight", 0.0)),
+                          abstain_gate=bool(cfg["selector"].get("abstain_gate", False)))
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description="TACS-X CIFAR-100 experiment runner")
-    p.add_argument("--config", default="configs/cifar100.yaml")
+    p = argparse.ArgumentParser(description="TACS-X CUB-200-2011 experiment runner")
+    p.add_argument("--config", default="configs/cub200.yaml")
     p.add_argument("--mode", choices=sorted(REQUIRED_MODES))
     p.add_argument("--name")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--candidates-per-query", type=int, help="override sampled candidates per query; recorded as a practical deviation")
     p.add_argument("--epochs", type=int, help="override training epochs; recorded as a practical deviation")
     p.add_argument("--batch-size", type=int, help="override batch size; recorded as a practical deviation")
-    p.add_argument("--data-root", help="directory containing cifar-100-python; useful for a mounted Kaggle Dataset")
-    p.add_argument("--download-data", action="store_true", help="explicitly download CIFAR-100 when it is not mounted locally")
+    p.add_argument("--data-root", help="extracted CUB_200_2011 directory, or its parent")
+    p.add_argument("--evaluate-test", action="store_true", help="explicitly evaluate official test images after validation checkpoint selection")
     p.add_argument("--allow-random-backbone", action="store_true", help="only for smoke tests; logs a fidelity deviation")
     p.add_argument("--topk-k", type=int, help="override topk.k for topk_tacs")
+    p.add_argument("--aux-query-weight", type=float,
+                   help="TACS-X anchored extension: weight of the trained query-only CE (paper: 0)")
+    p.add_argument("--abstain-gate", action="store_true",
+                   help="TACS-X anchored extension: per-query gate may fall back to query-only at inference (paper: off)")
     p.add_argument("--pair-rope-layout", choices=("legacy", "horizontal", "per_image"),
                    help="explicit multi-image position layout; old checkpoints use legacy")
     args = p.parse_args(argv)
@@ -101,10 +115,8 @@ def main(argv=None):
     if args.name: cfg["experiment"]["name"] = args.name
     if args.data_root:
         cfg["data"]["root"] = args.data_root
-    if args.download_data:
-        cfg["data"]["download"] = True
-        cfg["experiment"].setdefault("deviations", []).append(
-            "CIFAR-100 downloaded at runtime instead of using a mounted local dataset")
+    if cfg["data"].get("dataset") != "cub200":
+        p.error("This runner accepts the CUB-200-2011 configuration only")
     if args.candidates_per_query is not None:
         if args.candidates_per_query < 1:
             p.error("--candidates-per-query must be at least 1")
@@ -124,6 +136,18 @@ def main(argv=None):
         if args.topk_k < 1:
             p.error("--topk-k must be at least 1")
         cfg.setdefault("topk", {})["k"] = args.topk_k
+    if args.aux_query_weight is not None:
+        if args.aux_query_weight < 0:
+            p.error("--aux-query-weight must be non-negative")
+        cfg["policy"]["aux_query_weight"] = args.aux_query_weight
+    if args.abstain_gate:
+        cfg["selector"]["abstain_gate"] = True
+    if float(cfg["policy"].get("aux_query_weight", 0.0)) > 0:
+        cfg["experiment"].setdefault("deviations", []).append(
+            f"TACS-X anchored extension: trained query-only CE, weight {cfg['policy']['aux_query_weight']} (not in paper)")
+    if cfg["selector"].get("abstain_gate", False):
+        cfg["experiment"].setdefault("deviations", []).append(
+            "TACS-X anchored extension: per-query abstain gate (context vs query-only) trained on detached reward (not in paper)")
     if args.pair_rope_layout is not None:
         cfg["backbone"]["pair_rope_layout"] = args.pair_rope_layout
     cfg["backbone"].setdefault("pair_rope_layout", "legacy")
@@ -134,11 +158,10 @@ def main(argv=None):
     set_seed(int(cfg["experiment"]["seed"]))
     device = torch.device(args.device)
     cache_dino = mode == "dino_similarity"
-    train_loader, val_loader, test_loader, _ = make_cifar100_loaders(
+    train_loader, val_loader, test_loader, _ = make_cub200_loaders(
         cfg["data"]["root"], cfg["data"]["image_size"], cfg["data"]["candidate_pool_ratio"],
         cfg["data"]["candidates_per_query"], cfg["training"]["batch_size"], cfg["data"]["num_workers"], cfg["experiment"]["seed"], include_context=include_context,
-        validation_ratio=float(cfg["data"].get("validation_ratio", 0.1)), return_candidate_images=not cache_dino,
-        download=bool(cfg["data"].get("download", False)))
+        validation_ratio=float(cfg["data"].get("validation_ratio", 0.1)), return_candidate_images=not cache_dino)
     model = build_model(cfg, args.allow_random_backbone, include_selector=include_selector).to(device)
     dino_cache = None
     if cache_dino:
@@ -171,12 +194,17 @@ def main(argv=None):
             best, best_state = val_metrics["accuracy"], {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
         print(f"epoch {epoch + 1}/{cfg['training']['epochs']}: train_acc={train_metrics['accuracy']:.4f} val_acc={val_metrics['accuracy']:.4f}", flush=True)
     model.load_state_dict(best_state)
-    metrics, pairs = evaluate(model, test_loader, mode, device, collect_pairs=True, dino_cache=dino_cache)
-    metrics.update({"method": mode, "seed": cfg["experiment"]["seed"], "best_val_acc": best, "test_acc": metrics["accuracy"], "random_backbone": args.allow_random_backbone,
+    evaluation_split = "test" if args.evaluate_test else "validation"
+    metrics, pairs = evaluate(model, test_loader if args.evaluate_test else val_loader, mode, device, collect_pairs=True, dino_cache=dino_cache)
+    metrics.update({"method": mode, "seed": cfg["experiment"]["seed"], "best_val_acc": best,
+                    "evaluation_split": evaluation_split, "test_acc": metrics["accuracy"] if args.evaluate_test else None,
+                    "random_backbone": args.allow_random_backbone,
                     "trainer_version": 3,
                     "pair_rope_layout": cfg["backbone"]["pair_rope_layout"],
                     "eval_selection": cfg["evaluation"]["selection"],
                     "policy_action": "shared_with_task",
+                    "aux_query_weight": model.aux_query_weight,
+                    "abstain_gate": model.abstain_gate,
                     "adaptive_rule": "include_threshold_crossing",
                     "trainable_parameters": {g["name"]: sum(p.numel() for p in g["params"]) for g in groups}})
     out = Path(cfg["output"]["root"]) / cfg["experiment"]["name"]

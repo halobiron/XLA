@@ -17,5 +17,5 @@ echo
 echo "Bootstrap complete."
 echo "Next:"
 echo "  1) Follow official DINOv3 instructions to obtain ViT-S/16 weights."
-echo "  2) Set configs/cifar100.yaml -> backbone.weights."
+echo "  2) Set configs/cub200.yaml -> backbone.weights and extract CUB_200_2011.tgz into data/."
 echo "  3) Run: pytest -q"

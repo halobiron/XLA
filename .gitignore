@@ -8,6 +8,9 @@ data/
 !src/tacsx/data/
 !src/tacsx/data/*.py
 outputs/
+.cache/
+.pytest_cache/
+tmp/
 third_party/
 *.pt
 *.ckpt

@@ -2,16 +2,6 @@
   "detector": {
     "ignoreRules": [],
     "ignoreFiles": [],
-    "ignoreValues": [
-      {
-        "rule": "flat-type-hierarchy",
-        "value": "*",
-        "files": [
-          "demo/index.html"
-        ],
-        "createdAt": "2026-11-14T07:15:06.267Z",
-        "reason": "Claude: inherited type scale of the established results_v3 world (user chose to keep it); card headings 28-44px vs 18px body, lede 23px - hierarchy steps exceed 1.25x"
-      }
-    ]
+    "ignoreValues": []
   }
 }
