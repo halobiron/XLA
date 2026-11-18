@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TACS-X · CUB-200</title>
+<meta name="description" content="Kết quả TACS-X trên CUB-200-2011: anchored TACS-X so với No-Context ở chế độ 2 ảnh mỗi loài, kèm mọi chế độ đã thử và từng bước suy luận trên ảnh test.">
+<link rel="stylesheet" href="fonts/fonts.css">
+<style>
+:root{
+  --felt:#15322b; --felt-2:#1d4338; --felt-line:#2b5c4e;
+  --brass:#d1ac52; --brass-soft:#ecd9a6;
+  --card:#edeee6; --card-2:#e2e4da; --card-edge:#c9ccbf; --paper:#f7f7f1;
+  --ink:#18243f; --ink-soft:#434f6b; --red:#a32b1c; --slate:#6a7893; --green:#1b6450;
+  --serif:"Source Serif 4",Georgia,"Times New Roman",serif;
+  --sans:"Archivo","Segoe UI",system-ui,sans-serif;
+  --type:"Courier Prime","Courier New",monospace;
+  --ease:cubic-bezier(.16,1,.3,1);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:24px;scrollbar-color:var(--felt-line) var(--felt)}
+body{margin:0;background:var(--felt);color:var(--ink);font:400 18px/1.6 var(--serif);caret-color:var(--brass)}
+::selection{background:var(--brass);color:#1a1405}
+:focus-visible{outline:3px solid var(--brass);outline-offset:3px;border-radius:3px}
+a{color:inherit;text-underline-offset:.18em}
+button{font:inherit;color:inherit;cursor:pointer}
+.num{font-family:var(--type);font-variant-numeric:tabular-nums}
+
+/* frame */
+.shell{display:grid;grid-template-columns:250px minmax(0,1fr);max-width:1560px;margin:0 auto}
+.rail{position:sticky;top:0;height:100vh;padding:36px 22px;display:flex;flex-direction:column;gap:26px;border-right:1px solid var(--felt-line)}
+.brand{font:800 34px/1 var(--sans);font-stretch:75%;color:#f3efdc;margin:0}
+.brand small{display:block;margin-top:10px;font:500 13px/1.4 var(--sans);font-stretch:100%;color:#b9cdc4}
+.tabs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.tabs a{display:block;text-decoration:none;padding:10px 14px 10px 16px;border-radius:4px 14px 14px 4px;font:600 15px/1.3 var(--sans);color:#d5e2dc;background:var(--felt-2);border:1px solid var(--felt-line);transition:transform .25s var(--ease),background .2s}
+.tabs a:hover{transform:translateX(6px);background:#25554a}
+.tabs a[aria-current="true"]{background:var(--brass);color:#1a1405;border-color:var(--brass);transform:translateX(10px)}
+.rail-foot{margin-top:auto;font:500 13px/1.5 var(--sans);color:#a9c0b6}
+main{padding:36px 40px 120px;display:flex;flex-direction:column;gap:56px;min-width:0}
+
+/* catalog card */
+.card{position:relative;background:var(--card);border-radius:6px;padding:0 0 64px;box-shadow:0 1px 0 #fff8 inset,0 2px 0 var(--card-edge),0 22px 40px -18px #02100c99}
+.card::after{content:"";position:absolute;left:50%;bottom:22px;width:20px;height:20px;margin-left:-10px;border-radius:50%;background:var(--felt);box-shadow:inset 0 2px 3px #000a,0 1px 0 #fff9}
+.card-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;padding:30px 44px 10px;border-bottom:2px solid var(--red)}
+.card-head h2{margin:0;font:800 clamp(28px,3.3vw,44px)/1.05 var(--sans);font-stretch:75%;text-wrap:balance;max-width:24ch}
+.callno{font:400 14px/1.4 var(--type);color:var(--ink-soft);text-align:right}
+.card-body{padding:30px 44px 0}
+.lede{font-size:clamp(19px,1.9vw,23px);line-height:1.55;max-width:64ch;margin:0 0 26px;text-wrap:pretty}
+.lede strong{font-weight:700;box-shadow:inset 0 -.38em 0 #d1ac5266}
+.prose{max-width:68ch;margin:0 0 1em;text-wrap:pretty}
+.muted{color:var(--ink-soft)}
+h3.sub{margin:40px 0 12px;font:800 23px/1.15 var(--sans);font-stretch:75%}
+.cap{font:400 14px/1.5 var(--sans);color:var(--ink-soft);margin:10px 0 0;max-width:72ch}
+.cap b{color:var(--ink)}
+
+/* ledger tables */
+.ledger{width:100%;border-collapse:collapse;font:400 16px/1.45 var(--sans);margin:8px 0 6px}
+.ledger th,.ledger td{text-align:left;vertical-align:middle;padding:11px 10px;border-bottom:1px solid var(--card-edge)}
+.ledger thead th{border-bottom:2px solid var(--ink);font:700 14px/1.3 var(--sans);color:var(--ink-soft)}
+.ledger thead th.n{font-family:var(--sans)}
+.ledger td.n,.ledger th.n{text-align:right;font-family:var(--type);font-variant-numeric:tabular-nums;white-space:nowrap}
+.ledger tfoot td,.ledger tfoot th{border-top:2px solid var(--ink);border-bottom:0;font-weight:700}
+.ledger .ci{display:block;font:400 12px/1.2 var(--type);color:var(--ink-soft)}
+.d{font-weight:700}.d.pos{color:var(--green)}.d.neg{color:var(--red)}
+.rowlab{font-weight:700}
+.rowlab small{display:block;font:400 13px/1.3 var(--sans);color:var(--ink-soft)}
+.scroll{overflow-x:auto}
+
+/* decomposition */
+.decomp{margin:6px 0 4px;max-width:900px}
+.dbar{display:flex;height:58px;border:2px solid var(--ink);background:var(--paper)}
+.dbar span{display:flex;align-items:center;padding:0 14px;font:700 16px/1.15 var(--sans);overflow:hidden;white-space:nowrap}
+.dbar .s1{background:var(--ink);color:#f3efdc}
+.dbar .s2{background:var(--brass);color:#1a1405;border-left:2px solid var(--ink)}
+
+.stamp{display:inline-block;margin-top:24px;padding:8px 14px;border:2px solid var(--red);color:var(--red);font:800 14px/1.3 var(--sans);letter-spacing:.06em;text-transform:uppercase;transform:rotate(-1.2deg)}
+
+/* improvement section */
+:root{--s-nc:#4466b8;--s-paper:#c0661a;--s-x:#0f8f6f;--grid:#d3d5cc}
+.why{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr);gap:20px 44px;align-items:start;padding:28px 0;border-top:1px solid var(--card-edge)}
+.why:first-of-type{border-top:0;padding-top:4px}
+.why h3{margin:0 0 8px;font:800 23px/1.15 var(--sans);font-stretch:75%}
+.why .prose{font-size:17px;margin:0}
+.loss{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.loss figure{margin:0;padding:14px 16px 16px;background:var(--paper);border:2px solid var(--ink);border-radius:4px}
+.loss figcaption{font:800 17px/1.2 var(--sans);font-stretch:75%;margin-bottom:10px}
+.term{display:block;padding:7px 10px;margin-top:6px;border:1.5px solid var(--card-edge);border-radius:3px;font:600 14px/1.3 var(--sans);background:#fff}
+.term.add{border:2px solid var(--s-x);background:#e3f1ec}
+.term.add b{color:var(--green)}
+.term.off{border-style:dashed;color:var(--ink-soft);background:transparent}
+.term small{display:block;font:400 12px/1.35 var(--sans);color:var(--ink-soft);margin-top:2px}
+.chart{position:relative}
+.chart svg{display:block;width:100%;height:auto;overflow:visible}
+.chart .ax{font:400 12px var(--type);fill:var(--ink-soft)}
+.chart .lab{font:700 13px var(--sans);fill:var(--ink)}
+.chart .gl{stroke:var(--grid);stroke-width:1}
+.legend{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 8px;font:600 13px/1.3 var(--sans)}
+.legend i{display:inline-block;width:18px;height:2px;margin-right:6px;vertical-align:4px;border-radius:2px}
+.legend i.box{height:10px;width:10px;vertical-align:-1px;border-radius:2px}
+.tip{position:absolute;pointer-events:none;min-width:150px;padding:8px 10px;background:#fff;border:1px solid var(--card-edge);border-radius:4px;box-shadow:0 6px 18px -6px #02100c55;font:400 12px/1.4 var(--sans);opacity:0;transition:opacity .12s}
+.tip.on{opacity:1}
+.tip .hd{font:700 12px var(--sans);margin-bottom:4px;color:var(--ink-soft)}
+.tip .row{display:flex;align-items:center;gap:7px}
+.tip .row i{width:12px;height:2px;border-radius:2px;flex:none}
+.tip .row b{font:700 13px var(--type);color:var(--ink)}
+.bar-hit{cursor:default}
+.bar-hit:hover rect.mk,.bar-hit:focus rect.mk{filter:brightness(1.12)}
+.bar-hit:focus{outline:none}
+.bar-hit:focus rect.hit{stroke:var(--brass);stroke-width:2}
+details.tbl{margin-top:10px;font:400 13px/1.4 var(--sans);color:var(--ink-soft)}
+details.tbl summary{cursor:pointer;font-weight:600}
+details.tbl table{border-collapse:collapse;margin-top:8px;font:400 12px var(--type);color:var(--ink)}
+details.tbl td,details.tbl th{padding:3px 10px 3px 0;text-align:right}
+details.tbl th{font:600 12px var(--sans);text-align:right}
+@media (max-width:1100px){.why{grid-template-columns:1fr}}
+@media (max-width:600px){.loss{grid-template-columns:1fr}}
+
+/* walkthrough: example picker */
+.groups{display:flex;flex-direction:column;gap:12px;margin:4px 0 26px}
+.grp{display:grid;grid-template-columns:230px minmax(0,1fr);gap:14px;align-items:center}
+.grp-name{font:700 15px/1.25 var(--sans)}
+.grp-name small{display:block;font:400 13px/1.35 var(--type);color:var(--ink-soft)}
+.qstrip{display:flex;gap:8px;flex-wrap:wrap}
+.qbtn{padding:3px;border:2px solid var(--card-edge);background:var(--paper);border-radius:4px;line-height:0;transition:transform .2s var(--ease)}
+.qbtn:hover{transform:translateY(-3px)}
+.qbtn[aria-pressed="true"]{border-color:var(--ink);outline:2px solid var(--brass);outline-offset:2px}
+.qbtn img{width:60px;height:60px;object-fit:cover;display:block}
+
+/* walkthrough: stepper */
+.stepbar{position:sticky;top:0;z-index:4;display:flex;flex-wrap:wrap;align-items:center;gap:14px;padding:12px 0;margin:0 0 8px;background:var(--card);border-bottom:1px solid #b9c0cf}
+.qmini{display:flex;align-items:center;gap:12px;min-width:240px}
+.qmini img{width:52px;height:52px;object-fit:cover;border:2px solid var(--ink)}
+.qmini b{display:block;font:800 22px/1.1 var(--sans);font-stretch:75%}
+.qmini span{font:400 13px/1.3 var(--type);color:var(--ink-soft)}
+.dots{display:flex;gap:4px;flex-wrap:wrap}
+.dot{border:2px solid var(--ink);background:var(--paper);border-radius:999px;padding:5px 11px;font:700 13px/1 var(--sans);transition:background .2s,color .2s}
+.dot[aria-current="step"]{background:var(--ink);color:#f3efdc}
+.dot.done{background:var(--brass-soft)}
+.nav{display:flex;gap:8px;margin-left:auto}
+.btn{display:inline-flex;align-items:center;gap:6px;border:2px solid var(--ink);background:var(--ink);color:#f3efdc;padding:9px 16px;border-radius:999px;font:700 14px/1 var(--sans)}
+.btn.ghost{background:transparent;color:var(--ink)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+.keys{font:400 12px/1.3 var(--sans);color:var(--ink-soft)}
+
+.lanes-head{display:grid;grid-template-columns:200px minmax(0,1fr) minmax(0,2fr);margin-top:14px}
+.lanes-head div{padding:8px 14px;font:800 18px/1.1 var(--sans);font-stretch:75%}
+.lanes-head small{display:block;font:400 12px/1.3 var(--sans);font-stretch:100%;color:var(--ink-soft)}
+.srow{display:grid;grid-template-columns:200px minmax(0,1fr) minmax(0,2fr);border-top:2px solid var(--ink);transition:opacity .35s var(--ease),filter .35s var(--ease)}
+.srow:last-child{border-bottom:2px solid var(--ink)}
+.srow.ahead{opacity:.28;filter:grayscale(1)}
+.srow.ahead .cell>*{visibility:hidden}
+.srow.now{background:#fff}
+.stitle{padding:16px 14px;border-right:1px solid #c3c8d3}
+.stitle h3{margin:0 0 6px;font:800 19px/1.15 var(--sans);font-stretch:75%}
+.stitle p{margin:0;font:400 13px/1.45 var(--sans);color:var(--ink-soft)}
+.srow.now .stitle{box-shadow:inset 0 4px 0 var(--brass)}
+.cell{padding:16px 16px 18px;min-width:0;border-right:1px solid #c3c8d3}
+.cell:last-child{border-right:0}
+.skip{font:500 14px/1.5 var(--sans);color:var(--ink-soft);padding:10px 12px;border:1.5px dashed #9aa3b6;border-radius:4px}
+.cell .cap{font-size:13px;max-width:62ch}
+
+.pre{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.pre figure{margin:0}
+.pre figcaption{font:400 12px/1.3 var(--type);color:var(--ink-soft);margin-top:5px}
+.orig{display:block;max-width:150px;max-height:120px;border:2px solid var(--ink)}
+.arrow{width:26px;height:16px;stroke:var(--ink-soft);fill:none;stroke-width:2;flex:none}
+.gridimg{position:relative;width:168px;height:168px;border:2px solid var(--ink)}
+.gridimg img{width:100%;height:100%;display:block}
+.gridimg::after{content:"";position:absolute;inset:0;background-image:linear-gradient(#ffffff99 1px,transparent 1px),linear-gradient(90deg,#ffffff99 1px,transparent 1px);background-size:calc(100%/14) calc(100%/14)}
+.gridimg.sm{width:120px;height:120px}
+.tokbar{display:flex;height:34px;border:2px solid var(--ink);margin:10px 0 6px;max-width:100%}
+.tokbar span{display:flex;align-items:center;justify-content:center;font:700 12px/1 var(--type);overflow:hidden;white-space:nowrap}
+.t-pre{background:var(--brass);color:#1a1405}
+.t-q{background:var(--ink);color:#f3efdc}
+.t-c{background:var(--green);color:#fff}
+.tokkey{display:flex;gap:14px;flex-wrap:wrap;font:500 12px/1.3 var(--sans);color:var(--ink-soft)}
+.tokkey i{display:inline-block;width:12px;height:12px;margin-right:5px;vertical-align:-1px}
+.bign{font:700 26px/1.1 var(--type)}
+.bign small{font:400 13px/1 var(--sans);color:var(--ink-soft);margin-left:6px}
+
+.cands{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px}
+.cand{position:relative;min-width:0}
+.cand img{width:100%;aspect-ratio:1;object-fit:cover;display:block;border:2px solid var(--card-edge)}
+.cand .r{position:absolute;top:3px;left:3px;padding:1px 5px;background:#18243fd9;color:#f3efdc;font:700 11px/1.3 var(--type);border-radius:3px}
+.cand .lb{font:600 11px/1.2 var(--sans);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cand .sv{font:400 11px/1.2 var(--type);color:var(--ink-soft)}
+.cand.pick img{border-color:var(--ink);outline:3px solid var(--brass);outline-offset:1px}
+.same-mark{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:4px;vertical-align:1px}
+
+.scores{display:flex;flex-direction:column;gap:3px}
+.sc{display:grid;grid-template-columns:34px 34px minmax(90px,170px) minmax(0,1fr) 58px;gap:8px;align-items:center;font:500 12px/1.2 var(--sans);padding:2px 4px;border-radius:3px}
+.sc img{width:34px;height:34px;object-fit:cover;display:block}
+.sc .rk{font:700 12px/1 var(--type)}
+.sc .lb{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.track{position:relative;height:12px;background:#d4d8e2}
+.bar{position:absolute;inset:0 auto 0 0;background:var(--slate);transition:width .8s var(--ease)}
+.sc.pick{background:var(--brass-soft)}
+.sc.pick .bar{background:var(--ink)}
+.sc .val,.tp .val{font:700 12px/1 var(--type);text-align:right}
+.meta{display:flex;gap:22px;flex-wrap:wrap;margin-top:10px;font:500 13px/1.4 var(--sans)}
+.meta b{font-family:var(--type)}
+
+.pair{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pair .plus{font:800 26px/1 var(--sans);color:var(--ink-soft)}
+.top1{font:800 26px/1.1 var(--sans);font-stretch:75%}
+.top1 .num{font-size:17px;margin-left:8px;font-stretch:100%}
+.verdict{display:inline-block;margin-left:8px;padding:2px 9px;border-radius:999px;font:700 12px/1.4 var(--sans);vertical-align:4px;font-stretch:100%}
+.verdict.ok{background:var(--green);color:#fff}.verdict.no{border:1.5px solid var(--red);color:var(--red)}
+.tp{display:grid;grid-template-columns:minmax(80px,1.2fr) minmax(48px,1fr) 50px;gap:8px;align-items:center;margin-top:6px;font:500 13px/1.2 var(--sans)}
+.tp span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tp.first .bar{background:var(--ink)}
+.tp.truth span:first-child{font-weight:800;text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:3px}
+.truthkey{font:400 12px/1.4 var(--sans);color:var(--ink-soft);margin-top:8px}
+
+.eq{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;font:700 20px/1.3 var(--type);margin:2px 0 8px}
+.eq small{display:block;font:400 12px/1.2 var(--sans);color:var(--ink-soft)}
+.eq .op{color:var(--ink-soft)}
+.eq .res{padding:2px 10px;border:2px solid currentColor;border-radius:4px}
+.pos{color:var(--green)}.neg{color:var(--red)}
+
+/* protocol */
+.proto{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:44px}
+.proto h3{margin:0 0 10px;font:800 21px/1.15 var(--sans);font-stretch:75%}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 18px;margin:0}
+.kv dt{font:500 14px/1.6 var(--sans);color:var(--ink-soft)}
+.kv dd{margin:0;font:700 15px/1.6 var(--sans)}
+.caveats{margin:0;padding-left:1.1em;max-width:62ch}.caveats li{margin-bottom:.7em;padding-left:.2em}
+.sources{margin:28px 0 0;padding:0;list-style:none;font:400 14px/1.7 var(--sans)}
+.sources a{font-family:var(--type);font-size:13px}
+
+@media (prefers-reduced-motion:no-preference){
+  .srow.now .cell>*{animation:dealt .55s var(--ease) both}
+  @keyframes dealt{from{opacity:0;transform:translateY(14px)}}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+
+@media (max-width:1280px){
+  .lanes-head,.srow{grid-template-columns:150px minmax(0,1fr) minmax(0,1.7fr)}
+  .cands{grid-template-columns:repeat(4,minmax(0,1fr))}
+}
+@media (max-width:1100px){
+  .proto{grid-template-columns:1fr}
+  .lanes-head{display:none}
+  .srow{grid-template-columns:1fr}
+  .stitle,.cell{border-right:0}
+  .cell{border-top:1px solid #c3c8d3}
+  .cell::before{content:attr(data-lane);display:block;margin-bottom:8px;font:700 12px/1 var(--sans);letter-spacing:.09em;text-transform:uppercase;color:var(--ink-soft)}
+}
+@media (max-width:900px){
+  .shell{grid-template-columns:minmax(0,1fr)}
+  .card{min-width:0}
+  .rail{position:sticky;height:auto;z-index:6;flex-direction:row;align-items:center;gap:14px;padding:10px 16px;border-right:0;border-bottom:1px solid var(--felt-line);background:var(--felt);overflow-x:auto}
+  .brand{font-size:22px;white-space:nowrap}.brand small,.rail-foot{display:none}
+  .tabs{flex-direction:row}.tabs a{white-space:nowrap;padding:8px 12px;font-size:14px;border-radius:14px 14px 4px 4px}
+  .tabs a:hover,.tabs a[aria-current="true"]{transform:none}
+  main{padding:20px 16px 80px;gap:36px}
+  .card-head{padding:22px 20px 8px}.card-body{padding:22px 20px 0}
+  .grp{grid-template-columns:1fr;gap:6px}
+  .stepbar{top:52px}
+  .nav{margin-left:0}
+  .sc{grid-template-columns:28px 30px minmax(60px,1fr) minmax(0,1fr) 50px}
+  .dbar{height:auto;flex-direction:column}.dbar span{padding:10px 12px;white-space:normal;width:auto!important}
+  .dbar .s2{border-left:0;border-top:2px solid var(--ink)}
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <nav class="rail" aria-label="Các phần của demo">
+    <h1 class="brand">TACS-X<small>CUB-200-2011 · DINOv3 ViT-S/16<br>No-Context và anchored TACS-X</small></h1>
+    <ul class="tabs" id="tabs">
+      <li><a href="#thiet-lap">Thiết lập &amp; giới hạn</a></li>
+      <li><a href="#cai-tien">Cải tiến so với paper</a></li>
+      <li><a href="#ket-qua">Kết quả</a></li>
+      <li><a href="#tung-buoc">Từng bước</a></li>
+    </ul>
+    <p class="rail-foot">Dữ liệu dựng từ <span class="num">outputs/</span> bằng <span class="num">scripts/build_cub_demo.py</span>. Mở offline, không cần máy chủ.</p>
+  </nav>
+
+  <main>
+    <section class="card" id="thiet-lap" aria-labelledby="h3">
+      <header class="card-head"><h2 id="h3">Thiết lập và giới hạn</h2>
+        <div class="callno">CUB-200-2011 · 200 loài chim</div></header>
+      <div class="card-body">
+        <div class="proto">
+          <div>
+            <h3>So sánh thế nào</h3>
+            <p class="prose">Hai mô hình giống hệt nhau: cùng DINOv3 ViT-S/16, cùng 400 ảnh train (2 ảnh mỗi loài), cùng số epoch. Khác biệt duy nhất: TACS-X được ghép thêm một ảnh context do selector tự chọn từ chính 400 ảnh đó.</p>
+            <p class="prose">Mỗi mô hình được train 4 lần với seed khác nhau, chọn checkpoint trên validation, rồi chấm trên official test đúng một lần.</p>
+          </div>
+          <div>
+            <h3>Giới hạn</h3>
+            <ul class="caveats">
+              <li>Chỉ đúng khi rất ít nhãn (<b>2 ảnh mỗi loài</b>). Với đủ dữ liệu, TACS-X thua.</li>
+              <li>TACS-X là bản cải tiến của TACS (thêm loss cho nhánh không context), không phải tái lập paper.</li>
+              <li>Train ngắn và ảnh nhỏ hơn paper, nên số tuyệt đối không so trực tiếp với paper.</li>
+            </ul>
+          </div>
+        </div>
+        <ul class="sources">
+          <li>Kết quả test: <a href="../outputs/cub200_lowdata2_v1/test/test_result.json">outputs/cub200_lowdata2_v1/test/test_result.json</a></li>
+          <li>Kiểm chứng: <a href="../outputs/cub200_lowdata2_v1/verification.json">outputs/cub200_lowdata2_v1/verification.json</a></li>
+          <li>Paper: <a href="../paper/TACS_CVPR_2026.pdf#page=6">Bảng 2, TACS_CVPR_2026.pdf</a></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="card" id="cai-tien" aria-labelledby="hX">
+      <header class="card-head"><h2 id="hX">TACS-X sửa gì trong TACS, và vì sao kết quả khác paper</h2>
+        <div class="callno">validation, đủ dữ liệu, seed 42<br>trừ khi ghi khác</div></header>
+      <div class="card-body">
+        <div class="why">
+          <div>
+            <h3>Một chỗ hổng trong TACS gốc</h3>
+            <p class="prose">Reward của TACS so dự đoán <i>có</i> context với dự đoán <i>không</i> context. Nhưng nhánh không context không bao giờ được train, nên mốc so sánh này yếu và reward báo sai. TACS-X thêm đúng một loss để train nhánh đó.</p>
+          </div>
+          <div class="loss">
+            <figure><figcaption>TACS (paper)</figcaption>
+              <span class="term">CE(query + context)</span>
+              <span class="term">λ · policy loss<small>dùng reward = CE(chỉ query) − CE(query + context)</small></span>
+              <span class="term off">CE(chỉ query)<small>chỉ để tính reward, không được train</small></span>
+            </figure>
+            <figure><figcaption>TACS-X (dự án)</figcaption>
+              <span class="term">CE(query + context)</span>
+              <span class="term">λ · policy loss<small>cùng reward như paper</small></span>
+              <span class="term add"><b>+ CE(chỉ query)</b><small>được train, nên mốc so sánh đáng tin</small></span>
+            </figure>
+          </div>
+        </div>
+        <div class="why">
+          <div>
+            <h3>Hệ quả: nhánh không context bị bỏ rơi</h3>
+            <p class="prose">Bỏ context ra, nhánh của TACS gốc kém No-Context khoảng 3 điểm trong suốt quá trình train. Thêm loss, TACS-X kéo khoảng cách về khoảng 1 điểm.</p>
+          </div>
+          <div>
+            <div class="legend" id="lg1"></div>
+            <div class="chart" id="ch1"></div>
+            <details class="tbl"><summary>Bảng số</summary><div id="tb1"></div></details>
+          </div>
+        </div>
+        <div class="why">
+          <div>
+            <h3>Vì sao chỉ thắng khi rất ít dữ liệu</h3>
+            <p class="prose">Ảnh context lấy từ chính tập train. Khi đủ dữ liệu, No-Context đã học được những ảnh đó, nên context không thêm gì. Khi chỉ có 2 ảnh mỗi loài, một ảnh tương tự đặt cạnh query mới thật sự giúp.</p>
+            <p class="cap" id="papernote"></p>
+          </div>
+          <div>
+            <div class="legend" id="lg2"></div>
+            <div class="chart" id="ch2"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="ket-qua" aria-labelledby="h0">
+      <header class="card-head"><h2 id="h0">Với 2 ảnh mỗi loài, TACS-X vượt No-Context trên official test</h2>
+        <div class="callno" id="callno0"></div></header>
+      <div class="card-body">
+        <p class="lede" id="lede"></p>
+        <div class="scroll"><table class="ledger" id="perseed" aria-label="Accuracy trên official test theo từng seed"></table></div>
+
+        <h3 class="sub">Phần hơn đến từ đâu</h3>
+        <div class="decomp" id="decomp"></div>
+        <span class="stamp">Chỉ cho chế độ 2 ảnh có nhãn mỗi loài</span>
+        <p class="cap" id="papercap"></p>
+      </div>
+    </section>
+
+    <section class="card" id="tung-buoc" aria-labelledby="h2">
+      <header class="card-head"><h2 id="h2">Hai mô hình nhìn cùng một ảnh test, từng bước một</h2>
+        <div class="callno" id="callno2"></div></header>
+      <div class="card-body">
+        <p class="prose muted" id="wt-intro"></p>
+        <div class="groups" id="groups"></div>
+        <div class="stepbar" id="stepbar">
+          <div class="qmini" id="qmini"></div>
+          <div class="dots" id="dots" role="group" aria-label="Các bước"></div>
+          <div class="nav">
+            <button class="btn ghost" id="prev"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>Bước trước</button>
+            <button class="btn" id="next">Bước tiếp<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
+            <button class="btn ghost" id="all">Hiện tất cả</button>
+          </div>
+        </div>
+        <p class="keys">Phím ← → đổi bước</p>
+        <div id="trace"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="cub_data.js"></script>
+<script>
+(function(){
+const D=window.TACSX, R=D.results, W=D.walkthrough;
+const $=(s,r=document)=>r.querySelector(s);
+const el=(t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e};
+const fmt=(x,d=2)=>x==null?'–':Number(x).toLocaleString('vi-VN',{minimumFractionDigits:d,maximumFractionDigits:d});
+const pct=(x,d=2)=>x==null?'–':fmt(x*100,d)+'%';
+const sgn=(x,d=2)=>(x>0?'+':x<0?'−':'±')+fmt(Math.abs(x),d);
+const int=n=>Number(n).toLocaleString('vi-VN');
+const ci=c=>`[${sgn(c[0])}; ${sgn(c[1])}]`;
+const img=k=>D.images[k];
+const P=R.primary, A=R.accuracy;
+
+/* ---------- improvement charts ---------- */
+(function(){
+const NS='http://www.w3.org/2000/svg';
+const sv=(tag,attrs,parent)=>{const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(parent)parent.appendChild(e);return e};
+const txt=(parent,attrs,s)=>{const e=sv('text',attrs,parent);e.textContent=s;return e};
+function legend(el,items,box){el.replaceChildren(...items.map(([c,l])=>{const s=document.createElement('span');const i=document.createElement('i');if(box)i.className='box';i.style.background=c;s.append(i,document.createTextNode(l));return s}))}
+function tipRow(c,v,l){const r=document.createElement('div');r.className='row';const i=document.createElement('i');i.style.background=c;const b=document.createElement('b');b.textContent=v;const s=document.createElement('span');s.textContent=l;r.append(i,b,s);return r}
+
+/* chart 1: query-only accuracy per epoch */
+const CV=D.history.query_only_curves_full_data;
+const S=[['no_context','No-Context','var(--s-nc)','#4466b8'],['paper_tacs','TACS (paper), bỏ context','var(--s-paper)','#c0661a'],['anchored_tacs','TACS-X, bỏ context','var(--s-x)','#0f8f6f']];
+legend($('#lg1'),S.map(s=>[s[3],s[1]]));
+const W1=640,H1=300,m={l:44,r:16,t:12,b:34},n=CV.no_context.length;
+const all=S.flatMap(s=>CV[s[0]]),lo=Math.floor(Math.min(...all)*100)-1,hi=Math.ceil(Math.max(...all)*100)+1;
+const x=i=>m.l+i*(W1-m.l-m.r)/(n-1), y=v=>m.t+(hi-v*100)*(H1-m.t-m.b)/(hi-lo);
+const g1=sv('svg',{viewBox:`0 0 ${W1} ${H1}`,role:'img','aria-label':'Accuracy validation khi bỏ context theo epoch: No-Context, TACS gốc, TACS-X'},null);
+for(let v=Math.ceil(lo);v<=hi;v+=2){sv('line',{class:'gl',x1:m.l,x2:W1-m.r,y1:y(v/100),y2:y(v/100)},g1);txt(g1,{class:'ax',x:m.l-8,y:y(v/100)+4,'text-anchor':'end'},v+'%')}
+[1,5,10,15].forEach(e=>txt(g1,{class:'ax',x:x(e-1),y:H1-m.b+18,'text-anchor':'middle'},e));
+txt(g1,{class:'ax',x:W1-m.r,y:H1-4,'text-anchor':'end'},'epoch');
+S.forEach(([k,,,c])=>{
+  sv('polyline',{points:CV[k].map((v,i)=>`${x(i)},${y(v)}`).join(' '),fill:'none',stroke:c,'stroke-width':2,'stroke-linejoin':'round','stroke-linecap':'round'},g1);
+  sv('circle',{cx:x(n-1),cy:y(CV[k][n-1]),r:4.5,fill:c,stroke:'#edeee6','stroke-width':2},g1);
+});
+const hair=sv('line',{x1:0,x2:0,y1:m.t,y2:H1-m.b,stroke:'#9aa0a8','stroke-width':1,opacity:0},g1);
+const ch1=$('#ch1');ch1.appendChild(g1);
+const tip1=document.createElement('div');tip1.className='tip';ch1.appendChild(tip1);
+function show1(i){
+  hair.setAttribute('x1',x(i));hair.setAttribute('x2',x(i));hair.setAttribute('opacity',1);
+  const hd=document.createElement('div');hd.className='hd';hd.textContent='Epoch '+(i+1);
+  tip1.replaceChildren(hd,...S.map(([k,l,,c])=>tipRow(c,pct(CV[k][i],1),l)));
+  const r=g1.getBoundingClientRect(),px=x(i)/W1*r.width;
+  tip1.style.left=Math.min(px+12,r.width-170)+'px';tip1.style.top='8px';tip1.classList.add('on');
+}
+g1.addEventListener('pointermove',ev=>{const r=g1.getBoundingClientRect();const i=Math.round(((ev.clientX-r.left)/r.width*W1-m.l)/((W1-m.l-m.r)/(n-1)));show1(Math.max(0,Math.min(n-1,i)))});
+g1.addEventListener('pointerleave',()=>{tip1.classList.remove('on');hair.setAttribute('opacity',0)});
+g1.setAttribute('tabindex','0');let k1=n-1;
+g1.addEventListener('focus',()=>show1(k1));g1.addEventListener('blur',()=>{tip1.classList.remove('on');hair.setAttribute('opacity',0)});
+g1.addEventListener('keydown',ev=>{if(ev.key==='ArrowRight'||ev.key==='ArrowLeft'){ev.preventDefault();ev.stopPropagation();k1=Math.max(0,Math.min(n-1,k1+(ev.key==='ArrowRight'?1:-1)));show1(k1)}});
+const tb=document.createElement('table');const hr=tb.insertRow();['Epoch',...S.map(s=>s[1])].forEach(h=>{const th=document.createElement('th');th.textContent=h;hr.appendChild(th)});
+CV.no_context.forEach((_,i)=>{const r=tb.insertRow();r.insertCell().textContent=i+1;S.forEach(([k])=>r.insertCell().textContent=pct(CV[k][i],1))});
+$('#tb1').appendChild(tb);
+
+/* chart 2: TACS-X minus No-Context by training-set size */
+const rows=[['Đủ dữ liệu','5.400 ảnh'],['5 ảnh / loài','1.000 ảnh'],['3 ảnh / loài','600 ảnh'],['2 ảnh / loài','400 ảnh']].map(([lab,sub])=>{const r=D.regimes.find(z=>z.label===lab&&z.kind!=='confirmatory');return {lab,sub:sub+' · validation',d:r.difference_pp,c:r.ci95_pp}});
+const T=D.regimes.find(z=>z.kind==='confirmatory');rows.push({lab:'2 ảnh / loài',sub:'400 ảnh · test, 4 seed',d:T.difference_pp,c:T.ci95_pp,test:true});
+legend($('#lg2'),[['#0f8f6f','TACS-X hơn'],['#4466b8','No-Context hơn']],true);
+const W2=640,rh=46,H2=rows.length*rh+40,L=170,R=W2-60,lo2=-5,hi2=6,x2=v=>L+(v-lo2)*(R-L)/(hi2-lo2);
+const g2=sv('svg',{viewBox:`0 0 ${W2} ${H2}`,role:'img','aria-label':'Chênh lệch TACS-X trừ No-Context theo số ảnh train'},null);
+for(let v=-4;v<=4;v+=2){sv('line',{class:'gl',x1:x2(v),x2:x2(v),y1:6,y2:H2-28},g2);txt(g2,{class:'ax',x:x2(v),y:H2-10,'text-anchor':'middle'},(v>0?'+':'')+v)}
+sv('line',{x1:x2(0),x2:x2(0),y1:4,y2:H2-28,stroke:'#18243f','stroke-width':1.5},g2);
+txt(g2,{class:'ax',x:R+8,y:H2-10},'điểm');
+const ch2=$('#ch2');const tip2=document.createElement('div');tip2.className='tip';
+rows.forEach((r,i)=>{
+  const cy=10+i*rh+rh/2-4,col=r.d>0?'#0f8f6f':'#4466b8',x0=x2(0),x1=x2(r.d);
+  const grp=sv('g',{class:'bar-hit',tabindex:0,'aria-label':`${r.lab}, ${r.sub}: ${sgn(r.d)} điểm`},g2);
+  sv('rect',{class:'hit',x:0,y:cy-rh/2+2,width:W2,height:rh-4,fill:'transparent',rx:4},grp);
+  txt(grp,{class:'lab',x:0,y:cy-2},r.lab);txt(grp,{class:'ax',x:0,y:cy+13},r.sub);
+  const w=Math.abs(x1-x0),bx=Math.min(x0,x1);
+  sv('rect',{class:'mk',x:bx,y:cy-11,width:Math.max(w,2),height:22,rx:4,fill:col,opacity:r.test?1:.82},grp);
+  sv('line',{x1:x2(r.c[0]),x2:x2(r.c[1]),y1:cy,y2:cy,stroke:'#18243f','stroke-width':1.5},grp);
+  [r.c[0],r.c[1]].forEach(v=>sv('line',{x1:x2(v),x2:x2(v),y1:cy-6,y2:cy+6,stroke:'#18243f','stroke-width':1.5},grp));
+  txt(grp,{class:'lab',x:Math.max(x2(r.c[1]),x1)+8,y:cy+4},sgn(r.d));
+  const on=()=>{const hd=document.createElement('div');hd.className='hd';hd.textContent=`${r.lab} · ${r.sub}`;
+    const c=document.createElement('div');c.style.marginTop='3px';c.textContent='CI 95% '+ci(r.c);
+    tip2.replaceChildren(hd,tipRow(col,sgn(r.d)+' điểm','TACS-X − No-Context'),c);
+    const rr=g2.getBoundingClientRect();tip2.style.left=Math.min(x2(hi2)/W2*rr.width-160,rr.width-190)+'px';tip2.style.top=(cy/H2*rr.height+14)+'px';tip2.classList.add('on')};
+  grp.addEventListener('pointerenter',on);grp.addEventListener('focus',on);
+  grp.addEventListener('pointerleave',()=>tip2.classList.remove('on'));grp.addEventListener('blur',()=>tip2.classList.remove('on'));
+});
+ch2.append(g2,tip2);
+$('#papernote').innerHTML=`Paper thấy TACS thắng cả khi đủ dữ liệu, nhưng No-Context của paper chỉ đạt ${pct(D.paper.no_context,1)}, còn của dự án đạt ${pct(D.history.no_context_full_data,1)} (validation). Baseline mạnh hơn để lại ít chỗ cho context.`;
+})();
+
+/* ---------- results ---------- */
+$('#callno0').innerHTML=`official test · ${int(R.queries)} ảnh<br>${R.seeds.length} seed · đánh giá 1 lần`;
+$('#lede').innerHTML=`TACS-X đoán đúng <strong>${pct(A['anchored_tacs:forced_context'],1)}</strong> ảnh test, No-Context <strong>${pct(A['no_context:query_only'],1)}</strong>. TACS-X hơn ở cả ${R.seeds.length} lần train, nên phần hơn <strong>${sgn(P.difference_pp,1)} điểm</strong> khó là do may mắn (CI 95% ${ci(P.query_bootstrap_ci95_pp)}).`;
+const ps=$('#perseed');
+ps.innerHTML=`<thead><tr><th scope="col">Seed</th><th scope="col" class="n">No-Context</th><th scope="col" class="n">TACS-X</th><th scope="col" class="n">Chênh lệch</th></tr></thead>
+<tbody>${R.perSeed.map(s=>`<tr><th scope="row">${s.seed}</th><td class="n">${pct(s.no_context)}</td><td class="n">${pct(s.tacs)}</td><td class="n"><span class="d ${s.difference_pp>0?'pos':'neg'}">${sgn(s.difference_pp)}</span></td></tr>`).join('')}</tbody>
+<tfoot><tr><th scope="row">Trung bình</th><td class="n">${pct(A['no_context:query_only'])}</td><td class="n">${pct(A['anchored_tacs:forced_context'])}</td><td class="n"><span class="d pos">${sgn(P.difference_pp)}</span></td></tr></tfoot>`;
+const M=R.decomposition, a=M.anchored_query_only_minus_no_context_pp, b=M.context_over_own_query_path_pp;
+$('#decomp').innerHTML=`<div class="dbar" role="img" aria-label="Chênh lệch ${sgn(a+b)} điểm gồm ${sgn(a)} từ cách train anchored và ${sgn(b)} từ context"><span class="s1" style="width:${a/(a+b)*100}%">${sgn(a)} cách train</span><span class="s2" style="width:${b/(a+b)*100}%">${sgn(b)} context</span></div>
+<p class="prose" style="margin-top:14px">Khoảng hai phần ba đến từ cách train: TACS-X dù bỏ ảnh context vẫn hơn No-Context. Phần còn lại đến từ chính ảnh context mà selector chọn.</p>`;
+$('#papercap').innerHTML=`Để tham khảo, paper báo cáo trên CUB đủ dữ liệu: No-Context ${pct(D.paper.no_context,1)}, TACS ${pct(D.paper.tacs,1)}.`;
+
+/* ---------- protocol ---------- */
+
+/* ---------- walkthrough ---------- */
+const C=W.counts;
+$('#callno2').innerHTML=`checkpoint seed ${W.seed}`;
+$('#wt-intro').textContent=`Ảnh official test, rút ngẫu nhiên ${W.perGroup} ảnh mỗi nhóm.`;
+const STEPS=[
+ {k:'input',t:'Input',d:'Resize về 224×224.'},
+ {k:'tokens',t:'Patch tokens',d:'Lưới 14×14 patch, mỗi patch 384 chiều.'},
+ {k:'pool',t:'Candidate pool',d:`So query với ${W.poolSize} ảnh train, không dùng nhãn.`},
+ {k:'selector',t:'Selector scores',d:'Softmax trên pool, lấy argmax.'},
+ {k:'concat',t:'Token concat',d:'Nối patch tokens của query và context.'},
+ {k:'predict',t:'ViT blocks + head',d:'Xác suất trên 200 loài.'},
+ {k:'reward',t:'Reward',d:'Chỉ dùng khi train.'},
+];
+const arrow='<svg class="arrow" viewBox="0 0 26 16" aria-hidden="true"><path d="M1 8h22M17 2l6 6-6 6"/></svg>';
+const PREFIX=5, PATCH=196;
+function tokbar(ctx){
+  const total=PREFIX+PATCH*(ctx?2:1);
+  const seg=(c,n,l)=>`<span class="${c}" style="width:${n/total*100}%" title="${l}">${n>=40?l:''}</span>`;
+  return `<div class="tokbar" style="width:${ctx?100:Math.round((PREFIX+PATCH)/(PREFIX+2*PATCH)*100)}%">${seg('t-pre',PREFIX,PREFIX)}${seg('t-q',PATCH,'query '+PATCH)}${ctx?seg('t-c',PATCH,'context '+PATCH):''}</div>`;
+}
+const tokkey=ctx=>`<div class="tokkey"><span><i class="t-pre"></i>1 CLS + 4 storage</span><span><i class="t-q"></i>patch query</span>${ctx?'<span><i class="t-c"></i>patch context</span>':''}</div>`;
+const topList=(top,truth)=>top.map((x,i)=>`<div class="tp${i===0?' first':''}${x.label===truth?' truth':''}"><span>${x.label}</span><span class="track"><span class="bar" data-w="${x.p/top[0].p*100}"></span></span><span class="val">${pct(x.p,1)}</span></div>`).join('');
+const verdict=ok=>`<span class="verdict ${ok?'ok':'no'}">${ok?'đúng':'sai'}</span>`;
+const sameMark=c=>c.same?'<span class="same-mark" aria-label="cùng loài"></span>':'';
+function cells(ex,k){
+  const T=ex.tacs, q=img(ex.query), ctx=img(ex.context), pick=ex.candidates[0];
+  const skip='<div class="skip">No-Context không có bước này: mô hình chỉ thấy ảnh query.</div>';
+  switch(k){
+  case 'input':{
+    const v=`<div class="pre"><figure><img class="orig" src="${ex.original}" alt="Ảnh gốc ${ex.trueLabel}"><figcaption>${ex.originalSize.join('×')} gốc</figcaption></figure>${arrow}<figure><div class="gridimg sm"><img src="${q}" alt=""></div><figcaption>224×224 đã resize</figcaption></figure></div>`;
+    return [v, v];}
+  case 'tokens':{
+    const g=`<div class="gridimg"><img src="${q}" alt="Ảnh 224×224 với lưới 14×14 patch"></div>`;
+    return [g, g];}
+  case 'pool':{
+    const grid=ex.candidates.map((c,j)=>`<div class="cand${j===0?' pick':''}"><img src="${img(c.img)}" alt="Candidate ${c.label}"><span class="r">#${j+1}</span><div class="lb">${sameMark(c)}${c.label}</div><div class="sv">cos ${fmt(c.score*.07,3)}</div></div>`).join('');
+    return [skip,`<div class="cands">${grid}</div><p class="cap">Chấm xanh: cùng loài với query.</p>`];}
+  case 'selector':{
+    const rows=ex.candidates.map((c,j)=>`<div class="sc${j===0?' pick':''}"><span class="rk">#${j+1}</span><img src="${img(c.img)}" alt=""><span class="lb">${sameMark(c)}${c.label}</span><span class="track"><span class="bar" data-w="${c.p/ex.candidates[0].p*100}"></span></span><span class="val">${pct(c.p,1)}</span></div>`).join('');
+    return [skip,`<div class="scores" role="list" aria-label="Xác suất selector cho 8 candidate cao nhất">${rows}</div>
+      <div class="meta"><span>Chọn: <b>${pick.label}</b> ${pick.same?'(cùng loài)':'(khác loài)'}</span></div>`];}
+  case 'concat':
+    return [`<div class="pair"><div class="gridimg sm"><img src="${q}" alt=""></div></div>${tokbar(false)}${tokkey(false)}<p class="cap"><span class="bign">${PREFIX+PATCH}<small>token</small></span></p>`,
+            `<div class="pair"><div class="gridimg sm"><img src="${q}" alt="Query"></div><span class="plus">+</span><div class="gridimg sm"><img src="${ctx}" alt="Context đã chọn: ${ex.contextLabel}"></div></div>${tokbar(true)}${tokkey(true)}<p class="cap"><span class="bign">${PREFIX+2*PATCH}<small>token</small></span></p>`];
+  case 'predict':{
+    const tr=ex.trueLabel, nc=ex.noContext;
+    const side=(o)=>`<div class="top1">${o.top[0].label}<span class="num">${pct(o.top[0].p,1)}</span>${verdict(o.correct)}</div>${topList(o.top,tr)}`;
+    const key=`<p class="truthkey">Nhãn thật: <b>${tr}</b></p>`;
+    return [side(nc)+key, side(T)+key];}
+  case 'reward':{
+    const r=T.queryOnly.ce-T.ce;
+    return ['<div class="skip">No-Context không chọn context.</div>',
+      `<div class="eq"><span>${fmt(T.queryOnly.ce,3)}<small>CE chỉ query</small></span><span class="op">−</span><span>${fmt(T.ce,3)}<small>CE query + context</small></span><span class="op">=</span><span class="res ${r>0?'pos':'neg'}">${sgn(r,3)}<small>reward</small></span></div>
+       <p class="cap">${r>0?'Context giúp: selector được thưởng.':'Context làm hại: selector bị phạt.'}</p>`];}
+  }
+}
+function makeTrace(root,ex){
+  root.innerHTML='';
+  root.appendChild(el('div','lanes-head','<div></div><div>No-Context<small>chỉ ảnh query</small></div><div>Anchored TACS-X<small>query + 1 context được chọn</small></div>'));
+  const rows=STEPS.map((s,i)=>{
+    const r=el('div','srow'), [a,b]=cells(ex,s.k);
+    r.appendChild(el('div','stitle',`<h3>${i+1}. ${s.t}</h3><p>${s.d}</p>`));
+    const ca=el('div','cell',a);ca.dataset.lane='No-Context';
+    const cb=el('div','cell',b);cb.dataset.lane='Anchored TACS-X';
+    r.append(ca,cb);root.appendChild(r);return r;
+  });
+  function show(n){rows.forEach((r,i)=>{r.classList.toggle('ahead',i>n);r.classList.toggle('now',i===n);r.querySelectorAll('.bar').forEach(x=>x.style.width=i<=n?x.dataset.w+'%':'0')})}
+  show(-1);
+  return {rows,show};
+}
+const GROUPS=[['fixed','TACS-X sửa đúng'],['broken','TACS-X làm sai'],['both','Cả hai đúng'],['neither','Cả hai sai']];
+let step=0, ctl=null;
+GROUPS.forEach(([g,label])=>{
+  const exs=W.examples.filter(e=>e.group===g);
+  const row=el('div','grp');
+  row.appendChild(el('div','grp-name',`${label}<small>${int(C[g])} ảnh · hiện ${exs.length}</small>`));
+  const strip=el('div','qstrip');strip.setAttribute('role','group');strip.setAttribute('aria-label',label);
+  exs.forEach(e=>{
+    const b=el('button','qbtn');b.dataset.id=e.id;b.setAttribute('aria-pressed','false');
+    b.setAttribute('aria-label',`${label}: ảnh ${e.trueLabel}`);
+    b.innerHTML=`<img src="${img(e.query)}" alt="">`;b.onclick=()=>pick(e);strip.appendChild(b);
+  });
+  row.appendChild(strip);$('#groups').appendChild(row);
+});
+const dots=$('#dots');
+STEPS.forEach((s,i)=>{const b=el('button','dot',String(i+1));b.title=s.t;b.setAttribute('aria-label',`Bước ${i+1}: ${s.t}`);b.onclick=()=>go(i);dots.appendChild(b)});
+function pick(e){
+  document.querySelectorAll('#groups .qbtn').forEach(b=>b.setAttribute('aria-pressed',String(+b.dataset.id===e.id)));
+  const g=GROUPS.find(x=>x[0]===e.group)[1];
+  $('#qmini').innerHTML=`<img src="${img(e.query)}" alt="Query"><div><b>${e.trueLabel}</b><span>test #${e.id} · ${g.toLowerCase()}</span></div>`;
+  ctl=makeTrace($('#trace'),e);go(0,true);
+}
+function go(n,noScroll){
+  step=Math.max(0,Math.min(STEPS.length,n));ctl.show(step);
+  [...dots.children].forEach((d,i)=>{d.classList.toggle('done',i<step);if(i===step)d.setAttribute('aria-current','step');else d.removeAttribute('aria-current')});
+  $('#prev').disabled=step===0;$('#next').disabled=step>=STEPS.length-1;$('#all').disabled=step>=STEPS.length;
+  if(!noScroll&&step<STEPS.length){const r=ctl.rows[step].getBoundingClientRect(),bar=$('#stepbar').getBoundingClientRect();
+    if(r.top<bar.bottom+8||r.bottom>innerHeight)window.scrollBy({top:r.top-bar.bottom-12,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});}
+}
+$('#prev').onclick=()=>go(step>=STEPS.length?STEPS.length-1:step-1);
+$('#next').onclick=()=>go(step+1);
+$('#all').onclick=()=>go(STEPS.length,true);
+document.addEventListener('keydown',ev=>{
+  if(ev.target.closest('input,textarea,[contenteditable]')||ev.altKey||ev.ctrlKey||ev.metaKey)return;
+  const r=$('#tung-buoc').getBoundingClientRect();if(r.bottom<0||r.top>innerHeight)return;
+  if(ev.key==='ArrowRight'){ev.preventDefault();go(Math.min(step+1,STEPS.length-1))}
+  else if(ev.key==='ArrowLeft'){ev.preventDefault();go(step>=STEPS.length?STEPS.length-1:step-1)}
+  else if(ev.key==='Home'){ev.preventDefault();go(0)}
+  else if(ev.key==='End'){ev.preventDefault();go(STEPS.length,true)}
+});
+const qs=new URLSearchParams(location.search);
+pick(W.examples.find(e=>String(e.id)===qs.get('anh'))||W.examples.find(e=>e.group==='fixed')||W.examples[0]);
+if(qs.get('buoc'))go(qs.get('buoc')==='tat-ca'?STEPS.length:(+qs.get('buoc')||1)-1,true);
+
+/* nav */
+const links=[...document.querySelectorAll('#tabs a')];
+const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting)links.forEach(a=>a.setAttribute('aria-current',a.getAttribute('href')==='#'+e.target.id))}),{rootMargin:'-30% 0px -60% 0px'});
+document.querySelectorAll('main section').forEach(s=>io.observe(s));
+})();
+</script>
+</body>
+</html>

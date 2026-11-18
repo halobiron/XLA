@@ -1,0 +1,269 @@
+"""Bake demo/cub_data.js for the offline TACS-X CUB demo (demo/index.html).
+
+Every number is read from saved artifacts, never typed by hand:
+  * confirmatory result: outputs/cub200_lowdata2_v1 (test_result.json, verification.json);
+  * explored regimes: the validation-only development runs and corruption probe.
+The walkthrough re-runs the seed-0 No-Context and anchored TACS-X checkpoints on
+a seeded random sample of official-test images per outcome group (never
+hand-picked) and checks the reconstruction against the saved Kaggle
+predictions before writing anything.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import io
+import json
+import math
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+from PIL import Image
+
+import run_cub_anchored as rca
+from tacsx.models.tacs import gate_features
+
+ROOT = Path(__file__).resolve().parents[1]
+GROUPS = ("fixed", "broken", "both", "neither")
+PER_GROUP = 3
+SAMPLE_SEED = 42
+TOPK_CANDIDATES = 8
+
+
+def jpeg(image, size, quality=82):
+    if isinstance(size, int):
+        size = (size, size)
+    buf = io.BytesIO()
+    image.convert("RGB").resize(size, Image.BICUBIC).save(buf, "JPEG", quality=quality, optimize=True)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def aspect_thumb(image, longest=260):
+    w, h = image.size
+    s = longest / max(w, h)
+    return jpeg(image, (max(1, round(w * s)), max(1, round(h * s))))
+
+
+def class_names(data):
+    names = {}
+    for line in (data / "classes.txt").read_text().splitlines():
+        i, raw = line.split(maxsplit=1)
+        names[int(i) - 1] = raw.split(".", 1)[1].replace("_", " ")
+    return names
+
+
+def load_json(path):
+    return json.loads(Path(path).read_text(encoding="utf8"))
+
+
+def regimes():
+    """Every regime explored for anchored TACS-X, in the order it was run."""
+    out = ROOT / "outputs"
+    rows = []
+
+    def from_summary(run, label, scope, train):
+        s = load_json(out / run / "validation_summary.json")["per_seed"]["42"]
+        c = s["anchored_tacs:forced_context"]
+        rows.append({"label": label, "scope": scope, "train": train, "split": "validation · 594 ảnh",
+                     "seeds": "42 (dev)", "no_context": s["no_context"], "tacs": c["accuracy"],
+                     "difference_pp": c["difference_pp"], "ci95_pp": c["ci95_pp"], "kind": "exploratory"})
+
+    from_summary("cub200_anchored_dev_s42", "Đủ dữ liệu", "clean", "5.400 ảnh")
+    probe = load_json(out / "cub200_anchored_dev_s42/corruption_probe/probe_result.json")
+    acc = probe["accuracy"]
+    rows.append({"label": "Query bị nhiễu", "scope": "Gaussian noise σ 0,08 / 0,16, context sạch", "train": "5.400 ảnh",
+                 "split": "validation · 594 ảnh", "seeds": "42 (dev)",
+                 "no_context": acc["no_context:query_only"]["primary_noise_mean"],
+                 "tacs": acc["anchored_tacs:forced_context"]["primary_noise_mean"],
+                 "difference_pp": probe["primary"]["difference_pp"], "ci95_pp": probe["primary"]["ci95_pp"],
+                 "kind": "exploratory"})
+    from_summary("cub200_lowdata5_dev_s42", "5 ảnh / loài", "clean", "1.000 ảnh")
+    from_summary("cub200_lowdata3_dev_s42", "3 ảnh / loài", "clean", "600 ảnh")
+    from_summary("cub200_lowdata2_dev_s42", "2 ảnh / loài", "clean", "400 ảnh")
+    test = load_json(out / "cub200_lowdata2_v1/test/test_result.json")
+    rows.append({"label": "2 ảnh / loài", "scope": "clean · xác nhận", "train": "400 ảnh",
+                 "split": "official test · 5.794 ảnh", "seeds": "0, 1, 2, 3 (mới)",
+                 "no_context": test["accuracy_seed_mean"]["no_context:query_only"],
+                 "tacs": test["accuracy_seed_mean"]["anchored_tacs:forced_context"],
+                 "difference_pp": test["primary"]["difference_pp"], "ci95_pp": test["primary"]["ci95_pp"],
+                 "kind": "confirmatory"})
+    return rows
+
+
+def results(run):
+    test = load_json(run / "test/test_result.json")
+    ver = load_json(run / "verification.json")
+    plan = load_json(run / "registration.json")["plan"]
+    lock = load_json(run / "test/test_lock.json")
+    seeds = test["seeds"]
+    per = test["accuracy_per_seed"]
+    comp = ver["comparisons"]
+    gate = {"uses_context": 0, "queries": 0, "disagreements": 0, "context_on_disagreement": 0}
+    for s in seeds:
+        pr = torch.load(run / "test" / f"predictions_seed{s}_anchored_tacs.pt", weights_only=False)
+        g, f, q = pr["gated_logits"], pr["forced_context_logits"], pr["query_only_logits"]
+        uses = (g == f).all(-1)
+        disagree = f.argmax(-1) != q.argmax(-1)
+        gate["uses_context"] += int(uses.sum()); gate["queries"] += len(uses)
+        gate["disagreements"] += int(disagree.sum()); gate["context_on_disagreement"] += int((uses & disagree).sum())
+    return {
+        "gate": gate,
+        "seeds": seeds,
+        "queries": test["queries"],
+        "accuracy": test["accuracy_seed_mean"],
+        "perSeed": [{"seed": s, "no_context": per["no_context:query_only"][i],
+                     "tacs": per["anchored_tacs:forced_context"][i],
+                     "tacs_query_only": per["anchored_tacs:query_only"][i],
+                     "difference_pp": comp["anchored_tacs:forced_context"]["per_seed_difference_pp"][i],
+                     "epochs": {"no_context": lock["checkpoints"][f"{s}/no_context"]["validation_epoch"],
+                                "tacs": lock["checkpoints"][f"{s}/anchored_tacs"]["validation_epoch"]}}
+                    for i, s in enumerate(seeds)],
+        "primary": {**comp["anchored_tacs:forced_context"]},
+        "decomposition": ver["mechanism_decomposition"],
+        "gated": comp["anchored_tacs:gated"],
+        "checks": ver["checks"],
+        "retrieval": ver["retrieval"],
+        "split": ver["split"],
+        "lockedUtc": lock["locked_utc"],
+        "plan": {k: plan[k] for k in ("warmup_epochs", "epochs", "batch_size", "image_size", "tau", "lambda_policy",
+                                       "train_per_class", "score_scale")},
+    }
+
+
+@torch.no_grad()
+def trace(nc, tacs, image_tensor, qid, label, pixels, pool_ids, identities, pool_labels, names, features):
+    q = image_tensor[None].cuda()
+    y = torch.tensor([label]).cuda()
+    with torch.autocast("cuda", dtype=torch.float16):
+        nc_logits = nc.task_model(q).float()
+        base = tacs.task_model(q).float()
+        scores = rca.utility(tacs, q, features, torch.tensor([qid]), pool_ids, identities).float()
+        action = scores.argmax(-1)
+        ctx = tacs.task_model(q, pixels[action]).float()
+        gate_logit = tacs.gate(gate_features(base, ctx, scores)).float()
+        tokens_q = tacs.task_model.backbone.prepare_tokens(q).tokens.shape[1]
+    probs = scores.softmax(-1)[0]
+    finite = torch.isfinite(scores[0])
+    entropy = float(-(probs[finite] * probs[finite].clamp_min(1e-12).log()).sum())
+    top = torch.topk(scores[0], TOPK_CANDIDATES)
+
+    def topn(logits, n=5):
+        p = logits.softmax(-1)[0]
+        v, i = p.topk(n)
+        return [{"label": names[int(c)], "p": float(x), "cls": int(c)} for x, c in zip(v, i)]
+
+    ce = lambda lg: float(F.cross_entropy(lg, y))
+    return {
+        "nc_logits_argmax": int(nc_logits.argmax()), "ctx_argmax": int(ctx.argmax()),
+        "context_id": int(pool_ids[action].item()), "tokens_query": int(tokens_q),
+        "candidates": [{"pos": int(j), "id": int(pool_ids[j]), "label": names[pool_labels[int(j)]],
+                        "same": pool_labels[int(j)] == label, "score": float(scores[0, j]), "p": float(probs[j])}
+                       for j in top.indices.tolist()],
+        "pick": 0, "entropy": entropy, "maxEntropy": math.log(int(finite.sum())), "poolSize": int(finite.sum()),
+        "noContext": {"top": topn(nc_logits), "correct": int(nc_logits.argmax()) == label, "ce": ce(nc_logits)},
+        "tacs": {"top": topn(ctx), "correct": int(ctx.argmax()) == label, "ce": ce(ctx),
+                 "queryOnly": {"top": topn(base, 3), "correct": int(base.argmax()) == label, "ce": ce(base)},
+                 "gateLogit": float(gate_logit[0]), "gateUsesContext": bool(gate_logit[0] >= 0)},
+    }
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--run", default=str(ROOT / "outputs/cub200_lowdata2_v1"))
+    p.add_argument("--seed", type=int, default=0, help="which confirmatory seed's checkpoints to trace")
+    p.add_argument("--data-root", default=str(ROOT / "data/CUB_200_2011"))
+    p.add_argument("--out", default=str(ROOT / "demo/cub_data.js"))
+    args = p.parse_args()
+    run, data, seed = Path(args.run), Path(args.data_root), args.seed
+    torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = False
+    names = class_names(data)
+    plan = load_json(run / "registration.json")["plan"]
+
+    saved = {arm: torch.load(run / "test" / f"predictions_seed{seed}_{arm}.pt", weights_only=False)
+             for arm in ("no_context", "anchored_tacs")}
+    qids = saved["no_context"]["query_id"].tolist()
+    assert qids == saved["anchored_tacs"]["query_id"].tolist()
+    nc_ok = saved["no_context"]["query_only_correct"].numpy()
+    tc_ok = saved["anchored_tacs"]["forced_context_correct"].numpy()
+    group_of = np.where(~nc_ok & tc_ok, 0, np.where(nc_ok & ~tc_ok, 1, np.where(nc_ok & tc_ok, 2, 3)))
+    counts = {g: int((group_of == i).sum()) for i, g in enumerate(GROUPS)}
+    rng = np.random.default_rng(SAMPLE_SEED)
+    sample = [(g, int(j)) for i, g in enumerate(GROUPS)
+              for j in rng.choice(np.flatnonzero(group_of == i), PER_GROUP, replace=False)]
+
+    _, _, test, pixels, pool_ids, identities, _ = rca.prepare(data, 16, 0, include_test=True,
+                                                             train_per_class=plan["train_per_class"])
+    clean = test.dataset.candidate_base
+    pool_labels = {j: clean.targets[int(i)] for j, i in enumerate(pool_ids.tolist())}
+    warm = rca.build_warm_model(ROOT / "checkpoints/dinov3_vits16_pretrain_lvd1689m-08c60483.pth",
+                                ROOT / "third_party/dinov3", seed)
+    models = {}
+    for arm in ("no_context", "anchored_tacs"):
+        m = rca.make_arm(arm, warm, seed)
+        m.load_state_dict(torch.load(run / f"seed_{seed}" / arm / "checkpoint_best.pt", map_location="cpu",
+                                     weights_only=False)["model"])
+        models[arm] = m.eval()
+    features = rca.candidate_features(models["anchored_tacs"], pixels)
+
+    images, examples, mismatches = {}, [], []
+    position = {q: i for i, q in enumerate(test.dataset.query_ids)}
+
+    def img_ref(image_id, size):
+        key = f"{image_id}@{size}"
+        if key not in images:
+            with Image.open(clean.root / "images" / clean.paths[image_id]) as im:
+                images[key] = jpeg(im, size)
+        return key
+
+    for group, j in sample:
+        qid = qids[j]
+        label = clean.targets[qid]
+        tensor, _ = test.dataset.base[position[qid]]
+        t = trace(models["no_context"], models["anchored_tacs"], tensor, qid, label, pixels, pool_ids, identities,
+                  pool_labels, names, features)
+        expect = (int(saved["no_context"]["query_only_logits"][j].argmax()),
+                  int(saved["anchored_tacs"]["forced_context_logits"][j].argmax()),
+                  int(saved["anchored_tacs"]["context_id"][j]))
+        got = (t.pop("nc_logits_argmax"), t.pop("ctx_argmax"), t["context_id"])
+        if got != expect:
+            mismatches.append({"query_id": qid, "saved": expect, "rebuilt": got})
+        with Image.open(clean.root / "images" / clean.paths[qid]) as im:
+            original = aspect_thumb(im)
+            size = list(im.size)
+        for c in t["candidates"]:
+            c["img"] = img_ref(c["id"], 112)
+        examples.append({"id": qid, "group": group, "trueLabel": names[label], "original": original,
+                         "originalSize": size, "query": img_ref(qid, 224), "context": img_ref(t["context_id"], 224),
+                         "contextLabel": names[clean.targets[t["context_id"]]],
+                         "contextSame": clean.targets[t["context_id"]] == label, **t})
+    if mismatches:
+        raise SystemExit(f"Reconstruction differs from saved Kaggle predictions: {mismatches}")
+
+    dev = load_json(ROOT / "outputs/cub200_anchored_dev_s42/validation_summary.json")["per_seed"]["42"]
+    history = {"paper_tacs_full_data": {k: dev["paper_tacs:forced_context"][k] for k in ("accuracy", "difference_pp", "ci95_pp")},
+               "no_context_full_data": dev["no_context"]}
+    curves = {}
+    for arm in ("no_context", "paper_tacs", "anchored_tacs"):
+        h = load_json(ROOT / f"outputs/cub200_anchored_dev_s42/seed_42/{arm}/history.json")
+        curves[arm] = [r["validation"]["query_only"] for r in h]
+    history["query_only_curves_full_data"] = curves
+    payload = {"results": results(run), "regimes": regimes(), "history": history,
+               "paper": {"no_context": .821, "tacs": .852, "source": "Bảng 2, CUB, đủ dữ liệu, 100 epoch, 3 seed"},
+               "walkthrough": {"seed": seed, "counts": counts, "perGroup": PER_GROUP, "sampleSeed": SAMPLE_SEED,
+                               "poolSize": int(len(pool_ids)), "rebuiltMatchesSaved": f"{len(examples)}/{len(examples)}",
+                               "examples": examples},
+               "images": images}
+    Path(args.out).write_text("window.TACSX = " + json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + ";\n",
+                              encoding="utf8")
+    size = Path(args.out).stat().st_size / 2**20
+    print(f"Wrote {args.out} ({size:.2f} MiB): {len(examples)} examples, counts {counts}, "
+          f"{len(images)} images, reconstruction {len(examples)}/{len(examples)} matches saved predictions")
+
+
+if __name__ == "__main__":
+    main()

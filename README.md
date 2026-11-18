@@ -5,6 +5,38 @@ DINOv3 ViT-S/16 backbone. The active dataset is **CUB-200-2011** (200 bird class
 Old CIFAR training scripts, datasets, experiment checkpoints and packaged runs have
 been retired. The original DINOv3 pretrained weights remain in `checkpoints/`.
 
+## Result (narrow, pre-registered)
+
+With **2 labeled training images per class**, anchored TACS-X beat a matched
+No-Context model on the official CUB test split.
+
+| Official test, 5,794 images | Accuracy (mean of 4 seeds) |
+|---|---:|
+| No-Context | 53.33% |
+| Anchored TACS-X, always uses the selected context (primary readout) | **55.99%** |
+
+- **Difference:** +2.66pp. 95% CI [+2.16, +3.17] from a query bootstrap; [+1.80, +3.52] from a t-interval over seeds. Every seed is positive.
+- **Run:** fresh seeds 0-3. The test split was evaluated once, against a hash lock written before any test image was read.
+- **Where the gain comes from:** +1.69pp from anchored training (TACS-X's own query-only path) and +0.97pp from context (CI [+0.51, +1.43]).
+- **How the regime was chosen:** on validation, after five explored regimes. Full data: -1.35pp. Corrupted query: -4.46pp. K=5: -0.17pp. K=3: -0.34pp. K=2 dev: +2.19pp.
+
+This is not a full-data win and not an exact paper reproduction. "Anchored" is a TACS-X extension: a trained query-only reward baseline plus an abstain gate. The gate adds nothing; it falls back to query-only on every disagreement.
+
+- Artifacts: `outputs/cub200_lowdata2_v1/`, including `test/test_result.json`, `test/test_lock.json`, `verification.json` and `comparison.csv`.
+- Independent re-check: `python scripts/verify_cub_lowdata2.py` (12/12 checks pass).
+- Training/evaluation: `scripts/run_cub_anchored.py`.
+- Kaggle bundle: `scripts/package_kaggle_cub_anchored.py` and `scripts/kaggle_cub_anchored_cell.py`.
+
+## Offline demo
+
+Open `demo/index.html` by double-click; no server is needed. It shows the result, every explored regime, and a seven-step No-Context vs TACS-X walkthrough on official-test images. The examples are a seeded random sample per outcome group. Rebuild its data with:
+
+```powershell
+$env:PYTHONPATH="src"; .venv-gpu/Scripts/python.exe scripts/build_cub_demo.py
+```
+
+The builder re-runs the seed-0 checkpoints and refuses to write if any rebuilt prediction differs from the saved Kaggle predictions.
+
 ## Download the dataset
 
 Official record: https://data.caltech.edu/records/65de6-vp158
