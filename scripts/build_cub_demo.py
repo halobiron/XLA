@@ -1,10 +1,11 @@
 """Bake demo/cub_data.js for the offline TACS-X CUB demo (demo/index.html).
 
 Every number is read from saved artifacts, never typed by hand:
-  * headline result: outputs/cub200_unlabeled_v1 (No-Context, TACS-X with the 400-image labeled pool,
-    TACS-X with the 5,400-image unlabeled pool; fresh seeds 10-13, official test once);
+  * headline result: outputs/cub200_selftrain_v1 (No-Context and TACS-X after one round of
+    class-balanced self-training; seeds 10-13, official test once);
+  * its teachers outputs/cub200_unlabeled_v1 (No-Context, TACS-X with the labeled and the unlabeled pool);
   * earlier confirmatory run outputs/cub200_lowdata2_v1 and the validation-only regimes.
-The walkthrough re-runs one seed's No-Context and unlabeled-pool TACS-X checkpoints on
+The walkthrough re-runs one seed's self-trained No-Context and TACS-X checkpoints on
 a seeded random sample of official-test images per outcome group (never
 hand-picked) and checks the reconstruction against the saved Kaggle
 predictions before writing anything.
@@ -96,8 +97,8 @@ def regimes():
     return rows
 
 
-ARMS = ("no_context", "anchored_tacs", "anchored_tacs_unlabeled")
-BEST = "anchored_tacs_unlabeled"
+TEACHER_RUN = ROOT / "outputs/cub200_unlabeled_v1"
+STUDENTS = {"nc_pl": "no_context", "tacs_pl": "anchored_tacs"}  # run_cub_selftrain arm -> model arm
 
 
 def seed_t95(diffs):
@@ -110,43 +111,44 @@ def seed_t95(diffs):
 
 def results(run):
     test = load_json(run / "test/test_result.json")
-    lock = load_json(run / "test/test_lock.json")
-    seeds, per, comp = test["seeds"], test["accuracy_per_seed"], test["comparisons"]
-    correct, distinct = {}, {}
+    teacher = load_json(TEACHER_RUN / "test/test_result.json")
+    seeds, per, acc = test["seeds"], test["accuracy_per_seed"], test["accuracy_seed_mean"]
+    assert seeds == teacher["seeds"]
+    correct, distinct, pseudo = {}, [], {k: [] for k in STUDENTS}
     for s in seeds:
-        for arm in ARMS:
-            pr = torch.load(run / "test" / f"predictions_seed{s}_{arm}.pt", weights_only=False)
-            for r in ("query_only", "forced_context"):
-                if f"{r}_correct" in pr:
-                    correct.setdefault(f"{arm}:{r}", []).append(pr[f"{r}_correct"].numpy().astype(float))
-            if "context_id" in pr:
-                assert not (pr["context_id"] == pr["query_id"]).any()
-                distinct.setdefault(arm, []).append(len(set(pr["context_id"].tolist())))
+        pr = torch.load(run / "test" / f"predictions_seed{s}_tacs_pl.pt", weights_only=False)
+        assert not (pr["context_id"] == pr["query_id"]).any()
+        distinct.append(len(set(pr["context_id"].tolist())))
+        for r in ("query_only", "forced_context"):
+            correct.setdefault(r, []).append(pr[f"{r}_correct"].numpy().astype(float))
+        for k in STUDENTS:
+            pseudo[k].append(load_json(run / f"seed_{s}" / k / "pseudo_labels.json"))
     mean = {k: np.mean(v, 0) for k, v in correct.items()}
-    for k, v in mean.items():  # rebuilt from predictions must equal the locked result
-        assert abs(v.mean() - test["accuracy_seed_mean"][k]) < 1e-9, k
-
-    def diffs(a, b):
-        return [(per[b][i] - per[a][i]) * 100 for i in range(len(seeds))]
-
-    nc, lab, best = "no_context:query_only", "anchored_tacs:forced_context", f"{BEST}:forced_context"
-    vs_nc, vs_lab = diffs(nc, best), diffs(lab, best)
-    context = rca.paired_bootstrap(mean[f"{BEST}:query_only"], mean[best])
-    training = comp[f"{BEST}:query_only"]["all"]
+    context = rca.paired_bootstrap(mean["query_only"], mean["forced_context"])
+    nc, tx = "nc_pl:query_only", "tacs_pl:forced_context"
+    diffs = [(per[tx][i] - per[nc][i]) * 100 for i in range(len(seeds))]
+    ta = teacher["accuracy_seed_mean"]
     return {
-        "seeds": seeds, "queries": test["queries"], "accuracy": test["accuracy_seed_mean"],
-        "perSeed": [{"seed": s, "no_context": per[nc][i], "labeled": per[lab][i], "unlabeled": per[best][i],
-                     "vs_nc": vs_nc[i], "vs_labeled": vs_lab[i]} for i, s in enumerate(seeds)],
-        "vsNoContext": {**comp[best]["all"], "seed_t95": seed_t95(vs_nc), "positive": sum(d > 0 for d in vs_nc)},
-        "labeledVsNoContext": comp[lab]["all"],
-        "vsLabeled": {**test["primary"], "seed_t95": seed_t95(vs_lab), "positive": sum(d > 0 for d in vs_lab)},
-        "decomposition": {"training_pp": training["difference_pp"], "training_ci95_pp": training["ci95_pp"],
+        "seeds": seeds, "queries": test["queries"], "accuracy": acc,
+        "ladder": {"no_context": ta["no_context:query_only"], "tacs_labeled": ta["anchored_tacs:forced_context"],
+                   "tacs_unlabeled": ta["anchored_tacs_unlabeled:forced_context"], "tacs_selftrain": acc[tx],
+                   "nc_selftrain": acc[nc],
+                   "step_labeled": teacher["comparisons"]["anchored_tacs:forced_context"]["all"],
+                   "step_unlabeled": teacher["comparisons"]["anchored_tacs_unlabeled_vs_anchored_tacs"]["all"],
+                   "step_selftrain": test["secondary"]["tacs_pl_vs_teacher_tacs"],
+                   "nc_step_selftrain": test["secondary"]["nc_pl_vs_teacher_nc"]},
+        "perSeed": [{"seed": s, "no_context": per[nc][i], "tacs": per[tx][i], "difference_pp": diffs[i]}
+                    for i, s in enumerate(seeds)],
+        "primary": {**test["primary"], "positive": sum(d > 0 for d in diffs)},
+        "decomposition": {"training_pp": test["secondary"]["tacs_pl_query_only_vs_nc_pl"]["difference_pp"],
+                          "training_ci95_pp": test["secondary"]["tacs_pl_query_only_vs_nc_pl"]["ci95_pp"],
                           "context_pp": context["difference_pp"], "context_ci95_pp": context["ci95_pp"]},
-        "distinctContexts": {arm: float(np.mean(v)) for arm, v in distinct.items()},
-        "poolSizes": {"labeled": 400, "unlabeled": load_json(run / "split_audit.json")["unlabeled_pool_count"]},
-        "lockedUtc": lock["locked_utc"],
-        "earlierRun": {k: load_json(ROOT / "outputs/cub200_lowdata2_v1/test/test_result.json")["accuracy_seed_mean"][k]
-                       for k in (nc, lab)},
+        "distinctContexts": float(np.mean(distinct)),
+        "pseudo": {k: {"count": float(np.mean([p["count"] for p in v])),
+                       "precision": float(np.mean([p["precision_diagnostic_only"] for p in v])), "perClass": 5}
+                   for k, v in pseudo.items()},
+        "poolSize": load_json(TEACHER_RUN / "split_audit.json")["unlabeled_pool_count"],
+        "lockedUtc": load_json(run / "test/test_lock.json")["locked_utc"],
     }
 
 
@@ -189,7 +191,7 @@ def trace(nc, tacs, image_tensor, qid, label, pixels, pool_ids, identities, pool
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--run", default=str(ROOT / "outputs/cub200_unlabeled_v1"))
+    p.add_argument("--run", default=str(ROOT / "outputs/cub200_selftrain_v1"))
     p.add_argument("--seed", type=int, default=10, help="which confirmatory seed's checkpoints to trace")
     p.add_argument("--data-root", default=str(ROOT / "data/CUB_200_2011"))
     p.add_argument("--out", default=str(ROOT / "demo/cub_data.js"))
@@ -197,10 +199,11 @@ def main():
     run, data, seed = Path(args.run), Path(args.data_root), args.seed
     torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = False
     names = class_names(data)
-    plan = load_json(run / "registration.json")["plan"]
+    plan = {"train_per_class": load_json(run / "registration.json")["plan"]["train_per_class"]}
 
-    saved = {arm: torch.load(run / "test" / f"predictions_seed{seed}_{arm}.pt", weights_only=False)
-             for arm in ("no_context", BEST)}
+    saved = {STUDENTS[k]: torch.load(run / "test" / f"predictions_seed{seed}_{k}.pt", weights_only=False)
+             for k in STUDENTS}
+    BEST = "anchored_tacs"
     qids = saved["no_context"]["query_id"].tolist()
     assert qids == saved[BEST]["query_id"].tolist()
     nc_ok = saved["no_context"]["query_only_correct"].numpy()
@@ -213,15 +216,15 @@ def main():
 
     _, _, test, pools, identities, _ = rca.prepare(data, 16, 0, include_test=True,
                                                    train_per_class=plan["train_per_class"], unlabeled=True)
-    pixels, pool_ids = pools[rca.ARM_POOL[BEST]]
+    pixels, pool_ids = pools["unlabeled"]
     clean = test.dataset.candidate_base
     pool_labels = {j: clean.targets[int(i)] for j, i in enumerate(pool_ids.tolist())}
     warm = rca.build_warm_model(ROOT / "checkpoints/dinov3_vits16_pretrain_lvd1689m-08c60483.pth",
                                 ROOT / "third_party/dinov3", seed)
     models = {}
-    for arm in ("no_context", BEST):
+    for name, arm in STUDENTS.items():
         m = rca.make_arm(arm, warm, seed)
-        m.load_state_dict(torch.load(run / f"seed_{seed}" / arm / "checkpoint_best.pt", map_location="cpu",
+        m.load_state_dict(torch.load(run / f"seed_{seed}" / name / "checkpoint_best.pt", map_location="cpu",
                                      weights_only=False)["model"])
         models[arm] = m.eval()
     features = rca.candidate_features(models[BEST], pixels)

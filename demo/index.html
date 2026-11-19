@@ -286,21 +286,21 @@ details.tbl th{font:600 12px var(--sans);text-align:right}
         <div class="proto">
           <div>
             <h3>So sánh thế nào</h3>
-            <p class="prose">Các mô hình dùng chung DINOv3 ViT-S/16, cùng 400 ảnh có nhãn (2 ảnh mỗi loài) và cùng số epoch. No-Context chỉ nhìn ảnh query. TACS-X được ghép thêm một ảnh context do selector chọn: từ chính 400 ảnh có nhãn, hoặc từ 5.400 ảnh train mà không đọc nhãn của chúng.</p>
-            <p class="prose">Mỗi mô hình được train 4 lần với seed mới, chọn checkpoint trên validation, rồi chấm trên official test đúng một lần.</p>
+            <p class="prose">Hai mô hình dùng chung DINOv3 ViT-S/16 và cùng 400 ảnh có nhãn (2 ảnh mỗi loài). No-Context chỉ nhìn ảnh query. TACS-X được ghép thêm một ảnh context do selector chọn từ 5.400 ảnh train, không đọc nhãn của chúng.</p>
+            <p class="prose">Cả hai cùng qua một vòng self-training: mô hình tự gán nhãn cho ảnh chưa có nhãn, giữ 5 ảnh tự tin nhất mỗi loài, rồi train lại. Mỗi mô hình train 4 lần với seed khác nhau, chọn checkpoint trên validation, chấm official test đúng một lần.</p>
           </div>
           <div>
             <h3>Giới hạn</h3>
             <ul class="caveats">
               <li>Chỉ đúng khi rất ít nhãn (<b>2 ảnh mỗi loài</b>). Với đủ dữ liệu, TACS-X thua.</li>
-              <li>Bản pool chưa gán nhãn được thấy thêm 5.400 ảnh mà No-Context không thấy. Chưa so với một baseline cũng dùng các ảnh này (ví dụ pseudo-label).</li>
+              <li>Phần lớn mức tăng so với lúc đầu đến từ self-training, áp dụng cho cả hai mô hình. Ảnh context lúc dự đoán chỉ thêm khoảng nửa điểm.</li>
               <li>TACS-X là bản cải tiến của TACS, không phải tái lập paper. Train ngắn và ảnh nhỏ hơn paper, nên số tuyệt đối không so trực tiếp.</li>
             </ul>
           </div>
         </div>
         <ul class="sources">
-          <li>Kết quả test: <a href="../outputs/cub200_unlabeled_v1/test/test_result.json">outputs/cub200_unlabeled_v1/test/test_result.json</a></li>
-          <li>Run xác nhận trước (pool có nhãn, seed 0–3): <a href="../outputs/cub200_lowdata2_v1/test/test_result.json">outputs/cub200_lowdata2_v1/test/test_result.json</a></li>
+          <li>Kết quả test: <a href="../outputs/cub200_selftrain_v1/test/test_result.json">outputs/cub200_selftrain_v1/test/test_result.json</a></li>
+          <li>Mô hình trước self-training (cùng seed): <a href="../outputs/cub200_unlabeled_v1/test/test_result.json">outputs/cub200_unlabeled_v1/test/test_result.json</a></li>
           <li>Paper: <a href="../paper/TACS_CVPR_2026.pdf#page=6">Bảng 2, TACS_CVPR_2026.pdf</a></li>
         </ul>
       </div>
@@ -352,9 +352,9 @@ details.tbl th{font:600 12px var(--sans);text-align:right}
         </div>
         <div class="why">
           <div>
-            <h3>Cải tiến thứ hai: chọn context từ ảnh chưa gán nhãn</h3>
+            <h3>Cải tiến tiếp theo: tận dụng ảnh chưa gán nhãn</h3>
             <p class="prose" id="pooltext"></p>
-            <p class="cap">Official test, 4 seed mới. Mỗi bước ghi phần hơn so với hàng trên, kèm CI 95%.</p>
+            <p class="cap">Official test, seed 10–13. Mỗi bước ghi phần hơn so với hàng trên, kèm CI 95%.</p>
           </div>
           <div>
             <div class="chart" id="ch3"></div>
@@ -411,7 +411,7 @@ const sgn=(x,d=2)=>(x>0?'+':x<0?'−':'±')+fmt(Math.abs(x),d);
 const int=n=>Number(n).toLocaleString('vi-VN');
 const ci=c=>`[${sgn(c[0])}; ${sgn(c[1])}]`;
 const img=k=>D.images[k];
-const A=R.accuracy, V=R.vsNoContext, VL=R.vsLabeled, BEST='anchored_tacs_unlabeled:forced_context', LAB='anchored_tacs:forced_context', NC='no_context:query_only';
+const A=R.accuracy, P=R.primary, NC='nc_pl:query_only', TX='tacs_pl:forced_context';
 
 /* ---------- improvement charts ---------- */
 (function(){
@@ -485,15 +485,19 @@ rows.forEach((r,i)=>{
 ch2.append(g2,tip2);
 /* chart 3: accuracy ladder on official test */
 {
-const RS=D.results;
-const L3=[{lab:'No-Context',sub:'chỉ ảnh query',v:A[NC],c:'#4466b8',fill:true},
-          {lab:'TACS-X',sub:`pool ${int(RS.poolSizes.labeled)} ảnh có nhãn`,v:A[LAB],c:'#0f8f6f',fill:false,d:RS.labeledVsNoContext},
-          {lab:'TACS-X',sub:`pool ${int(RS.poolSizes.unlabeled)} ảnh chưa gán nhãn`,v:A[BEST],c:'#0f8f6f',fill:true,d:VL}];
-const W3=640,rh=62,H3=L3.length*rh+34,X0=190,X1=W3-150,lo3=52,hi3=58,x3=v=>X0+(v*100-lo3)*(X1-X0)/(hi3-lo3);
-const g3=sv('svg',{viewBox:`0 0 ${W3} ${H3}`,role:'img','aria-label':L3.map(r=>`${r.lab} ${r.sub}: ${pct(r.v,2)}`).join('; ')},null);
-for(let v=lo3;v<=hi3;v+=2){sv('line',{class:'gl',x1:x3(v/100),x2:x3(v/100),y1:4,y2:H3-26},g3);txt(g3,{class:'ax',x:x3(v/100),y:H3-8,'text-anchor':'middle'},v+'%')}
+const LD=D.results.ladder, PS=D.results.pseudo.tacs_pl;
+const L3=[{lab:'No-Context',sub:'chỉ ảnh query',v:LD.no_context,c:'#4466b8',fill:true},
+          {lab:'TACS-X',sub:'pool 400 ảnh có nhãn',v:LD.tacs_labeled,c:'#0f8f6f',fill:false,d:LD.step_labeled},
+          {lab:'TACS-X',sub:`pool ${int(D.results.poolSize)} ảnh chưa gán nhãn`,v:LD.tacs_unlabeled,c:'#0f8f6f',fill:false,d:LD.step_unlabeled},
+          {lab:'TACS-X + self-training',sub:`thêm ~${int(Math.round(PS.count))} ảnh tự gán nhãn`,v:LD.tacs_selftrain,c:'#0f8f6f',fill:true,d:LD.step_selftrain}];
+const top=26,W3=640,rh=62,H3=top+L3.length*rh+34,X0=200,X1=W3-150,lo3=52,hi3=66,x3=v=>X0+(v*100-lo3)*(X1-X0)/(hi3-lo3);
+const g3=sv('svg',{viewBox:`0 0 ${W3} ${H3}`,role:'img','aria-label':L3.map(r=>`${r.lab} ${r.sub}: ${pct(r.v,2)}`).join('; ')+`; No-Context + self-training: ${pct(LD.nc_selftrain,2)}`},null);
+for(let v=lo3;v<=hi3;v+=2){sv('line',{class:'gl',x1:x3(v/100),x2:x3(v/100),y1:top,y2:H3-26},g3);txt(g3,{class:'ax',x:x3(v/100),y:H3-8,'text-anchor':'middle'},v+'%')}
+const xr=x3(LD.nc_selftrain);
+sv('line',{x1:xr,x2:xr,y1:top-6,y2:H3-26,stroke:'#4466b8','stroke-width':1.5,'stroke-dasharray':'5 4'},g3);
+txt(g3,{class:'ax',x:xr,y:top-12,'text-anchor':'middle',style:'fill:#4466b8'},`No-Context + self-training ${pct(LD.nc_selftrain,2)}`);
 L3.forEach((r,i)=>{
-  const cy=8+i*rh+rh/2;
+  const cy=top+8+i*rh+rh/2;
   txt(g3,{class:'lab',x:0,y:cy-2},r.lab);txt(g3,{class:'ax',x:0,y:cy+14},r.sub);
   if(i)sv('line',{x1:x3(L3[i-1].v),x2:x3(r.v),y1:cy-rh,y2:cy,stroke:'#9aa0a8','stroke-width':1.5,'stroke-dasharray':'3 3'},g3);
   sv('circle',{cx:x3(r.v),cy,r:8,fill:r.fill?r.c:'#edeee6',stroke:r.c,'stroke-width':3},g3);
@@ -502,22 +506,21 @@ L3.forEach((r,i)=>{
           txt(g3,{class:'ax',x:W3,y:cy+14,'text-anchor':'end'},ci(r.d.ci95_pp))}
 });
 $('#ch3').appendChild(g3);
-const dc=RS.distinctContexts;
-$('#pooltext').innerHTML=`Với pool ${int(RS.poolSizes.labeled)} ảnh có nhãn, query chỉ được ghép với những ảnh mô hình đã thuộc (khoảng ${int(Math.round(dc.anchored_tacs))} ảnh context khác nhau trên test). Cho selector chọn từ ${int(RS.poolSizes.unlabeled)} ảnh train mà không đọc nhãn, số ảnh context khác nhau tăng lên khoảng ${int(Math.round(dc.anchored_tacs_unlabeled))}. Phần hơn thêm nhỏ, ${sgn(VL.difference_pp)} điểm, và chỉ ${VL.positive}/${RS.seeds.length} seed dương.`;
+$('#pooltext').innerHTML=`Chọn context từ ${int(D.results.poolSize)} ảnh train thay vì 400 ảnh mô hình đã thuộc chỉ thêm ${sgn(LD.step_unlabeled.difference_pp)} điểm. Bước lớn nhất là self-training: mô hình tự gán nhãn cho ảnh chưa có nhãn, giữ ${PS.perClass} ảnh tự tin nhất mỗi loài (khoảng ${int(Math.round(PS.count))} ảnh, đúng khoảng ${pct(PS.precision,0)}), rồi train lại. No-Context được làm y hệt (đường nét đứt) và cũng tăng mạnh, nhưng vẫn kém TACS-X ${fmt(D.results.primary.difference_pp,1)} điểm.`;
 }
 $('#papernote').innerHTML=`Paper thấy TACS thắng cả khi đủ dữ liệu, nhưng No-Context của paper chỉ đạt ${pct(D.paper.no_context,1)}, còn của dự án đạt ${pct(D.history.no_context_full_data,1)} (validation). Baseline mạnh hơn để lại ít chỗ cho context.`;
 })();
 
 /* ---------- results ---------- */
 $('#callno0').innerHTML=`official test · ${int(R.queries)} ảnh<br>${R.seeds.length} seed · đánh giá 1 lần`;
-$('#lede').innerHTML=`TACS-X đoán đúng <strong>${pct(A[BEST],1)}</strong> ảnh test, No-Context <strong>${pct(A[NC],1)}</strong>. TACS-X hơn ở cả ${R.seeds.length} lần train, nên phần hơn <strong>${sgn(V.difference_pp,1)} điểm</strong> khó là do may mắn (CI 95% ${ci(V.ci95_pp)}).`;
+$('#lede').innerHTML=`Cùng qua self-training, TACS-X đoán đúng <strong>${pct(A[TX],1)}</strong> ảnh test, No-Context <strong>${pct(A[NC],1)}</strong>. TACS-X hơn ở cả ${R.seeds.length} lần train, nên phần hơn <strong>${sgn(P.difference_pp,1)} điểm</strong> khó là do may mắn (CI 95% ${ci(P.ci95_pp)}).`;
 const ps=$('#perseed');
-ps.innerHTML=`<thead><tr><th scope="col">Seed</th><th scope="col" class="n">No-Context</th><th scope="col" class="n">TACS-X<br>pool có nhãn</th><th scope="col" class="n">TACS-X<br>pool chưa gán nhãn</th><th scope="col" class="n">Hơn<br>No-Context</th></tr></thead>
-<tbody>${R.perSeed.map(s=>`<tr><th scope="row">${s.seed}</th><td class="n">${pct(s.no_context)}</td><td class="n">${pct(s.labeled)}</td><td class="n">${pct(s.unlabeled)}</td><td class="n"><span class="d ${s.vs_nc>0?'pos':'neg'}">${sgn(s.vs_nc)}</span></td></tr>`).join('')}</tbody>
-<tfoot><tr><th scope="row">Trung bình</th><td class="n">${pct(A[NC])}</td><td class="n">${pct(A[LAB])}</td><td class="n">${pct(A[BEST])}</td><td class="n"><span class="d pos">${sgn(V.difference_pp)}</span></td></tr></tfoot>`;
+ps.innerHTML=`<thead><tr><th scope="col">Seed</th><th scope="col" class="n">No-Context</th><th scope="col" class="n">TACS-X</th><th scope="col" class="n">Chênh lệch</th></tr></thead>
+<tbody>${R.perSeed.map(s=>`<tr><th scope="row">${s.seed}</th><td class="n">${pct(s.no_context)}</td><td class="n">${pct(s.tacs)}</td><td class="n"><span class="d ${s.difference_pp>0?'pos':'neg'}">${sgn(s.difference_pp)}</span></td></tr>`).join('')}</tbody>
+<tfoot><tr><th scope="row">Trung bình</th><td class="n">${pct(A[NC])}</td><td class="n">${pct(A[TX])}</td><td class="n"><span class="d pos">${sgn(P.difference_pp)}</span></td></tr></tfoot>`;
 const M=R.decomposition, a=M.training_pp, b=M.context_pp;
 $('#decomp').innerHTML=`<div class="dbar" role="img" aria-label="Chênh lệch ${sgn(a+b)} điểm gồm ${sgn(a)} từ cách train và ${sgn(b)} từ ảnh context lúc dự đoán"><span class="s1" style="width:${a/(a+b)*100}%">${sgn(a)} cách train</span><span class="s2" style="width:${b/(a+b)*100}%;min-width:76px;padding:0 10px">${sgn(b)}</span></div>
-<p class="prose" style="margin-top:14px">Gần như toàn bộ đến từ cách train: bỏ ảnh context ra, TACS-X vẫn hơn No-Context ${sgn(a,1)} điểm. Ảnh context lúc dự đoán chỉ thêm ${sgn(b,1)} điểm (ô vàng), chưa phân biệt được với 0 (CI 95% ${ci(M.context_ci95_pp)}).</p>`;
+<p class="prose" style="margin-top:14px">Phần lớn đến từ cách train: bỏ ảnh context ra, TACS-X vẫn hơn No-Context ${sgn(a,1)} điểm. Ảnh context lúc dự đoán thêm ${sgn(b,1)} điểm (ô vàng, CI 95% ${ci(M.context_ci95_pp)}).</p>`;
 $('#papercap').innerHTML=`Để tham khảo, paper báo cáo trên CUB đủ dữ liệu: No-Context ${pct(D.paper.no_context,1)}, TACS ${pct(D.paper.tacs,1)}.`;
 
 /* ---------- protocol ---------- */
@@ -525,7 +528,7 @@ $('#papercap').innerHTML=`Để tham khảo, paper báo cáo trên CUB đủ d�
 /* ---------- walkthrough ---------- */
 const C=W.counts;
 $('#callno2').innerHTML=`checkpoint seed ${W.seed}`;
-$('#wt-intro').textContent=`Ảnh official test, rút ngẫu nhiên ${W.perGroup} ảnh mỗi nhóm.`;
+$('#wt-intro').textContent=`Hai mô hình sau self-training. Ảnh official test, rút ngẫu nhiên ${W.perGroup} ảnh mỗi nhóm.`;
 const STEPS=[
  {k:'input',t:'Input',d:'Resize về 224×224.'},
  {k:'tokens',t:'Patch tokens',d:'Lưới 14×14 patch, mỗi patch 384 chiều.'},
