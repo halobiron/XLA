@@ -1,9 +1,10 @@
 """Bake demo/cub_data.js for the offline TACS-X CUB demo (demo/index.html).
 
 Every number is read from saved artifacts, never typed by hand:
-  * confirmatory result: outputs/cub200_lowdata2_v1 (test_result.json, verification.json);
-  * explored regimes: the validation-only development runs and corruption probe.
-The walkthrough re-runs the seed-0 No-Context and anchored TACS-X checkpoints on
+  * headline result: outputs/cub200_unlabeled_v1 (No-Context, TACS-X with the 400-image labeled pool,
+    TACS-X with the 5,400-image unlabeled pool; fresh seeds 10-13, official test once);
+  * earlier confirmatory run outputs/cub200_lowdata2_v1 and the validation-only regimes.
+The walkthrough re-runs one seed's No-Context and unlabeled-pool TACS-X checkpoints on
 a seeded random sample of official-test images per outcome group (never
 hand-picked) and checks the reconstruction against the saved Kaggle
 predictions before writing anything.
@@ -95,43 +96,57 @@ def regimes():
     return rows
 
 
+ARMS = ("no_context", "anchored_tacs", "anchored_tacs_unlabeled")
+BEST = "anchored_tacs_unlabeled"
+
+
+def seed_t95(diffs):
+    """95% t interval over seeds (t_{0.975, n-1}; n=4 -> 3.182)."""
+    d = np.asarray(diffs, float)
+    tcrit = {2: 12.706, 3: 4.303, 4: 3.182, 5: 2.776}[len(d)]
+    half = tcrit * d.std(ddof=1) / math.sqrt(len(d))
+    return [float(d.mean() - half), float(d.mean() + half)]
+
+
 def results(run):
     test = load_json(run / "test/test_result.json")
-    ver = load_json(run / "verification.json")
-    plan = load_json(run / "registration.json")["plan"]
     lock = load_json(run / "test/test_lock.json")
-    seeds = test["seeds"]
-    per = test["accuracy_per_seed"]
-    comp = ver["comparisons"]
-    gate = {"uses_context": 0, "queries": 0, "disagreements": 0, "context_on_disagreement": 0}
+    seeds, per, comp = test["seeds"], test["accuracy_per_seed"], test["comparisons"]
+    correct, distinct = {}, {}
     for s in seeds:
-        pr = torch.load(run / "test" / f"predictions_seed{s}_anchored_tacs.pt", weights_only=False)
-        g, f, q = pr["gated_logits"], pr["forced_context_logits"], pr["query_only_logits"]
-        uses = (g == f).all(-1)
-        disagree = f.argmax(-1) != q.argmax(-1)
-        gate["uses_context"] += int(uses.sum()); gate["queries"] += len(uses)
-        gate["disagreements"] += int(disagree.sum()); gate["context_on_disagreement"] += int((uses & disagree).sum())
+        for arm in ARMS:
+            pr = torch.load(run / "test" / f"predictions_seed{s}_{arm}.pt", weights_only=False)
+            for r in ("query_only", "forced_context"):
+                if f"{r}_correct" in pr:
+                    correct.setdefault(f"{arm}:{r}", []).append(pr[f"{r}_correct"].numpy().astype(float))
+            if "context_id" in pr:
+                assert not (pr["context_id"] == pr["query_id"]).any()
+                distinct.setdefault(arm, []).append(len(set(pr["context_id"].tolist())))
+    mean = {k: np.mean(v, 0) for k, v in correct.items()}
+    for k, v in mean.items():  # rebuilt from predictions must equal the locked result
+        assert abs(v.mean() - test["accuracy_seed_mean"][k]) < 1e-9, k
+
+    def diffs(a, b):
+        return [(per[b][i] - per[a][i]) * 100 for i in range(len(seeds))]
+
+    nc, lab, best = "no_context:query_only", "anchored_tacs:forced_context", f"{BEST}:forced_context"
+    vs_nc, vs_lab = diffs(nc, best), diffs(lab, best)
+    context = rca.paired_bootstrap(mean[f"{BEST}:query_only"], mean[best])
+    training = comp[f"{BEST}:query_only"]["all"]
     return {
-        "gate": gate,
-        "seeds": seeds,
-        "queries": test["queries"],
-        "accuracy": test["accuracy_seed_mean"],
-        "perSeed": [{"seed": s, "no_context": per["no_context:query_only"][i],
-                     "tacs": per["anchored_tacs:forced_context"][i],
-                     "tacs_query_only": per["anchored_tacs:query_only"][i],
-                     "difference_pp": comp["anchored_tacs:forced_context"]["per_seed_difference_pp"][i],
-                     "epochs": {"no_context": lock["checkpoints"][f"{s}/no_context"]["validation_epoch"],
-                                "tacs": lock["checkpoints"][f"{s}/anchored_tacs"]["validation_epoch"]}}
-                    for i, s in enumerate(seeds)],
-        "primary": {**comp["anchored_tacs:forced_context"]},
-        "decomposition": ver["mechanism_decomposition"],
-        "gated": comp["anchored_tacs:gated"],
-        "checks": ver["checks"],
-        "retrieval": ver["retrieval"],
-        "split": ver["split"],
+        "seeds": seeds, "queries": test["queries"], "accuracy": test["accuracy_seed_mean"],
+        "perSeed": [{"seed": s, "no_context": per[nc][i], "labeled": per[lab][i], "unlabeled": per[best][i],
+                     "vs_nc": vs_nc[i], "vs_labeled": vs_lab[i]} for i, s in enumerate(seeds)],
+        "vsNoContext": {**comp[best]["all"], "seed_t95": seed_t95(vs_nc), "positive": sum(d > 0 for d in vs_nc)},
+        "labeledVsNoContext": comp[lab]["all"],
+        "vsLabeled": {**test["primary"], "seed_t95": seed_t95(vs_lab), "positive": sum(d > 0 for d in vs_lab)},
+        "decomposition": {"training_pp": training["difference_pp"], "training_ci95_pp": training["ci95_pp"],
+                          "context_pp": context["difference_pp"], "context_ci95_pp": context["ci95_pp"]},
+        "distinctContexts": {arm: float(np.mean(v)) for arm, v in distinct.items()},
+        "poolSizes": {"labeled": 400, "unlabeled": load_json(run / "split_audit.json")["unlabeled_pool_count"]},
         "lockedUtc": lock["locked_utc"],
-        "plan": {k: plan[k] for k in ("warmup_epochs", "epochs", "batch_size", "image_size", "tau", "lambda_policy",
-                                       "train_per_class", "score_scale")},
+        "earlierRun": {k: load_json(ROOT / "outputs/cub200_lowdata2_v1/test/test_result.json")["accuracy_seed_mean"][k]
+                       for k in (nc, lab)},
     }
 
 
@@ -174,8 +189,8 @@ def trace(nc, tacs, image_tensor, qid, label, pixels, pool_ids, identities, pool
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--run", default=str(ROOT / "outputs/cub200_lowdata2_v1"))
-    p.add_argument("--seed", type=int, default=0, help="which confirmatory seed's checkpoints to trace")
+    p.add_argument("--run", default=str(ROOT / "outputs/cub200_unlabeled_v1"))
+    p.add_argument("--seed", type=int, default=10, help="which confirmatory seed's checkpoints to trace")
     p.add_argument("--data-root", default=str(ROOT / "data/CUB_200_2011"))
     p.add_argument("--out", default=str(ROOT / "demo/cub_data.js"))
     args = p.parse_args()
@@ -185,30 +200,31 @@ def main():
     plan = load_json(run / "registration.json")["plan"]
 
     saved = {arm: torch.load(run / "test" / f"predictions_seed{seed}_{arm}.pt", weights_only=False)
-             for arm in ("no_context", "anchored_tacs")}
+             for arm in ("no_context", BEST)}
     qids = saved["no_context"]["query_id"].tolist()
-    assert qids == saved["anchored_tacs"]["query_id"].tolist()
+    assert qids == saved[BEST]["query_id"].tolist()
     nc_ok = saved["no_context"]["query_only_correct"].numpy()
-    tc_ok = saved["anchored_tacs"]["forced_context_correct"].numpy()
+    tc_ok = saved[BEST]["forced_context_correct"].numpy()
     group_of = np.where(~nc_ok & tc_ok, 0, np.where(nc_ok & ~tc_ok, 1, np.where(nc_ok & tc_ok, 2, 3)))
     counts = {g: int((group_of == i).sum()) for i, g in enumerate(GROUPS)}
     rng = np.random.default_rng(SAMPLE_SEED)
     sample = [(g, int(j)) for i, g in enumerate(GROUPS)
               for j in rng.choice(np.flatnonzero(group_of == i), PER_GROUP, replace=False)]
 
-    _, _, test, pixels, pool_ids, identities, _ = rca.prepare(data, 16, 0, include_test=True,
-                                                             train_per_class=plan["train_per_class"])
+    _, _, test, pools, identities, _ = rca.prepare(data, 16, 0, include_test=True,
+                                                   train_per_class=plan["train_per_class"], unlabeled=True)
+    pixels, pool_ids = pools[rca.ARM_POOL[BEST]]
     clean = test.dataset.candidate_base
     pool_labels = {j: clean.targets[int(i)] for j, i in enumerate(pool_ids.tolist())}
     warm = rca.build_warm_model(ROOT / "checkpoints/dinov3_vits16_pretrain_lvd1689m-08c60483.pth",
                                 ROOT / "third_party/dinov3", seed)
     models = {}
-    for arm in ("no_context", "anchored_tacs"):
+    for arm in ("no_context", BEST):
         m = rca.make_arm(arm, warm, seed)
         m.load_state_dict(torch.load(run / f"seed_{seed}" / arm / "checkpoint_best.pt", map_location="cpu",
                                      weights_only=False)["model"])
         models[arm] = m.eval()
-    features = rca.candidate_features(models["anchored_tacs"], pixels)
+    features = rca.candidate_features(models[BEST], pixels)
 
     images, examples, mismatches = {}, [], []
     position = {q: i for i, q in enumerate(test.dataset.query_ids)}
@@ -224,11 +240,11 @@ def main():
         qid = qids[j]
         label = clean.targets[qid]
         tensor, _ = test.dataset.base[position[qid]]
-        t = trace(models["no_context"], models["anchored_tacs"], tensor, qid, label, pixels, pool_ids, identities,
+        t = trace(models["no_context"], models[BEST], tensor, qid, label, pixels, pool_ids, identities,
                   pool_labels, names, features)
         expect = (int(saved["no_context"]["query_only_logits"][j].argmax()),
-                  int(saved["anchored_tacs"]["forced_context_logits"][j].argmax()),
-                  int(saved["anchored_tacs"]["context_id"][j]))
+                  int(saved[BEST]["forced_context_logits"][j].argmax()),
+                  int(saved[BEST]["context_id"][j]))
         got = (t.pop("nc_logits_argmax"), t.pop("ctx_argmax"), t["context_id"])
         if got != expect:
             mismatches.append({"query_id": qid, "saved": expect, "rebuilt": got})

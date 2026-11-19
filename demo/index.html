@@ -268,7 +268,7 @@ details.tbl th{font:600 12px var(--sans);text-align:right}
 <body>
 <div class="shell">
   <nav class="rail" aria-label="Các phần của demo">
-    <h1 class="brand">TACS-X<small>CUB-200-2011 · DINOv3 ViT-S/16<br>No-Context và anchored TACS-X</small></h1>
+    <h1 class="brand">TACS-X<small>CUB-200-2011 · DINOv3 ViT-S/16<br>No-Context và TACS-X</small></h1>
     <ul class="tabs" id="tabs">
       <li><a href="#thiet-lap">Thiết lập &amp; giới hạn</a></li>
       <li><a href="#cai-tien">Cải tiến so với paper</a></li>
@@ -286,21 +286,21 @@ details.tbl th{font:600 12px var(--sans);text-align:right}
         <div class="proto">
           <div>
             <h3>So sánh thế nào</h3>
-            <p class="prose">Hai mô hình giống hệt nhau: cùng DINOv3 ViT-S/16, cùng 400 ảnh train (2 ảnh mỗi loài), cùng số epoch. Khác biệt duy nhất: TACS-X được ghép thêm một ảnh context do selector tự chọn từ chính 400 ảnh đó.</p>
-            <p class="prose">Mỗi mô hình được train 4 lần với seed khác nhau, chọn checkpoint trên validation, rồi chấm trên official test đúng một lần.</p>
+            <p class="prose">Các mô hình dùng chung DINOv3 ViT-S/16, cùng 400 ảnh có nhãn (2 ảnh mỗi loài) và cùng số epoch. No-Context chỉ nhìn ảnh query. TACS-X được ghép thêm một ảnh context do selector chọn: từ chính 400 ảnh có nhãn, hoặc từ 5.400 ảnh train mà không đọc nhãn của chúng.</p>
+            <p class="prose">Mỗi mô hình được train 4 lần với seed mới, chọn checkpoint trên validation, rồi chấm trên official test đúng một lần.</p>
           </div>
           <div>
             <h3>Giới hạn</h3>
             <ul class="caveats">
               <li>Chỉ đúng khi rất ít nhãn (<b>2 ảnh mỗi loài</b>). Với đủ dữ liệu, TACS-X thua.</li>
-              <li>TACS-X là bản cải tiến của TACS (thêm loss cho nhánh không context), không phải tái lập paper.</li>
-              <li>Train ngắn và ảnh nhỏ hơn paper, nên số tuyệt đối không so trực tiếp với paper.</li>
+              <li>Bản pool chưa gán nhãn được thấy thêm 5.400 ảnh mà No-Context không thấy. Chưa so với một baseline cũng dùng các ảnh này (ví dụ pseudo-label).</li>
+              <li>TACS-X là bản cải tiến của TACS, không phải tái lập paper. Train ngắn và ảnh nhỏ hơn paper, nên số tuyệt đối không so trực tiếp.</li>
             </ul>
           </div>
         </div>
         <ul class="sources">
-          <li>Kết quả test: <a href="../outputs/cub200_lowdata2_v1/test/test_result.json">outputs/cub200_lowdata2_v1/test/test_result.json</a></li>
-          <li>Kiểm chứng: <a href="../outputs/cub200_lowdata2_v1/verification.json">outputs/cub200_lowdata2_v1/verification.json</a></li>
+          <li>Kết quả test: <a href="../outputs/cub200_unlabeled_v1/test/test_result.json">outputs/cub200_unlabeled_v1/test/test_result.json</a></li>
+          <li>Run xác nhận trước (pool có nhãn, seed 0–3): <a href="../outputs/cub200_lowdata2_v1/test/test_result.json">outputs/cub200_lowdata2_v1/test/test_result.json</a></li>
           <li>Paper: <a href="../paper/TACS_CVPR_2026.pdf#page=6">Bảng 2, TACS_CVPR_2026.pdf</a></li>
         </ul>
       </div>
@@ -348,6 +348,16 @@ details.tbl th{font:600 12px var(--sans);text-align:right}
           <div>
             <div class="legend" id="lg2"></div>
             <div class="chart" id="ch2"></div>
+          </div>
+        </div>
+        <div class="why">
+          <div>
+            <h3>Cải tiến thứ hai: chọn context từ ảnh chưa gán nhãn</h3>
+            <p class="prose" id="pooltext"></p>
+            <p class="cap">Official test, 4 seed mới. Mỗi bước ghi phần hơn so với hàng trên, kèm CI 95%.</p>
+          </div>
+          <div>
+            <div class="chart" id="ch3"></div>
           </div>
         </div>
       </div>
@@ -401,7 +411,7 @@ const sgn=(x,d=2)=>(x>0?'+':x<0?'−':'±')+fmt(Math.abs(x),d);
 const int=n=>Number(n).toLocaleString('vi-VN');
 const ci=c=>`[${sgn(c[0])}; ${sgn(c[1])}]`;
 const img=k=>D.images[k];
-const P=R.primary, A=R.accuracy;
+const A=R.accuracy, V=R.vsNoContext, VL=R.vsLabeled, BEST='anchored_tacs_unlabeled:forced_context', LAB='anchored_tacs:forced_context', NC='no_context:query_only';
 
 /* ---------- improvement charts ---------- */
 (function(){
@@ -473,19 +483,41 @@ rows.forEach((r,i)=>{
   grp.addEventListener('pointerleave',()=>tip2.classList.remove('on'));grp.addEventListener('blur',()=>tip2.classList.remove('on'));
 });
 ch2.append(g2,tip2);
+/* chart 3: accuracy ladder on official test */
+{
+const RS=D.results;
+const L3=[{lab:'No-Context',sub:'chỉ ảnh query',v:A[NC],c:'#4466b8',fill:true},
+          {lab:'TACS-X',sub:`pool ${int(RS.poolSizes.labeled)} ảnh có nhãn`,v:A[LAB],c:'#0f8f6f',fill:false,d:RS.labeledVsNoContext},
+          {lab:'TACS-X',sub:`pool ${int(RS.poolSizes.unlabeled)} ảnh chưa gán nhãn`,v:A[BEST],c:'#0f8f6f',fill:true,d:VL}];
+const W3=640,rh=62,H3=L3.length*rh+34,X0=190,X1=W3-150,lo3=52,hi3=58,x3=v=>X0+(v*100-lo3)*(X1-X0)/(hi3-lo3);
+const g3=sv('svg',{viewBox:`0 0 ${W3} ${H3}`,role:'img','aria-label':L3.map(r=>`${r.lab} ${r.sub}: ${pct(r.v,2)}`).join('; ')},null);
+for(let v=lo3;v<=hi3;v+=2){sv('line',{class:'gl',x1:x3(v/100),x2:x3(v/100),y1:4,y2:H3-26},g3);txt(g3,{class:'ax',x:x3(v/100),y:H3-8,'text-anchor':'middle'},v+'%')}
+L3.forEach((r,i)=>{
+  const cy=8+i*rh+rh/2;
+  txt(g3,{class:'lab',x:0,y:cy-2},r.lab);txt(g3,{class:'ax',x:0,y:cy+14},r.sub);
+  if(i)sv('line',{x1:x3(L3[i-1].v),x2:x3(r.v),y1:cy-rh,y2:cy,stroke:'#9aa0a8','stroke-width':1.5,'stroke-dasharray':'3 3'},g3);
+  sv('circle',{cx:x3(r.v),cy,r:8,fill:r.fill?r.c:'#edeee6',stroke:r.c,'stroke-width':3},g3);
+  txt(g3,{class:'lab',x:x3(r.v)+16,y:cy+5},pct(r.v,2));
+  if(r.d){txt(g3,{class:'lab',x:W3,y:cy-2,'text-anchor':'end',style:'fill:var(--green)'},sgn(r.d.difference_pp)+' điểm');
+          txt(g3,{class:'ax',x:W3,y:cy+14,'text-anchor':'end'},ci(r.d.ci95_pp))}
+});
+$('#ch3').appendChild(g3);
+const dc=RS.distinctContexts;
+$('#pooltext').innerHTML=`Với pool ${int(RS.poolSizes.labeled)} ảnh có nhãn, query chỉ được ghép với những ảnh mô hình đã thuộc (khoảng ${int(Math.round(dc.anchored_tacs))} ảnh context khác nhau trên test). Cho selector chọn từ ${int(RS.poolSizes.unlabeled)} ảnh train mà không đọc nhãn, số ảnh context khác nhau tăng lên khoảng ${int(Math.round(dc.anchored_tacs_unlabeled))}. Phần hơn thêm nhỏ, ${sgn(VL.difference_pp)} điểm, và chỉ ${VL.positive}/${RS.seeds.length} seed dương.`;
+}
 $('#papernote').innerHTML=`Paper thấy TACS thắng cả khi đủ dữ liệu, nhưng No-Context của paper chỉ đạt ${pct(D.paper.no_context,1)}, còn của dự án đạt ${pct(D.history.no_context_full_data,1)} (validation). Baseline mạnh hơn để lại ít chỗ cho context.`;
 })();
 
 /* ---------- results ---------- */
 $('#callno0').innerHTML=`official test · ${int(R.queries)} ảnh<br>${R.seeds.length} seed · đánh giá 1 lần`;
-$('#lede').innerHTML=`TACS-X đoán đúng <strong>${pct(A['anchored_tacs:forced_context'],1)}</strong> ảnh test, No-Context <strong>${pct(A['no_context:query_only'],1)}</strong>. TACS-X hơn ở cả ${R.seeds.length} lần train, nên phần hơn <strong>${sgn(P.difference_pp,1)} điểm</strong> khó là do may mắn (CI 95% ${ci(P.query_bootstrap_ci95_pp)}).`;
+$('#lede').innerHTML=`TACS-X đoán đúng <strong>${pct(A[BEST],1)}</strong> ảnh test, No-Context <strong>${pct(A[NC],1)}</strong>. TACS-X hơn ở cả ${R.seeds.length} lần train, nên phần hơn <strong>${sgn(V.difference_pp,1)} điểm</strong> khó là do may mắn (CI 95% ${ci(V.ci95_pp)}).`;
 const ps=$('#perseed');
-ps.innerHTML=`<thead><tr><th scope="col">Seed</th><th scope="col" class="n">No-Context</th><th scope="col" class="n">TACS-X</th><th scope="col" class="n">Chênh lệch</th></tr></thead>
-<tbody>${R.perSeed.map(s=>`<tr><th scope="row">${s.seed}</th><td class="n">${pct(s.no_context)}</td><td class="n">${pct(s.tacs)}</td><td class="n"><span class="d ${s.difference_pp>0?'pos':'neg'}">${sgn(s.difference_pp)}</span></td></tr>`).join('')}</tbody>
-<tfoot><tr><th scope="row">Trung bình</th><td class="n">${pct(A['no_context:query_only'])}</td><td class="n">${pct(A['anchored_tacs:forced_context'])}</td><td class="n"><span class="d pos">${sgn(P.difference_pp)}</span></td></tr></tfoot>`;
-const M=R.decomposition, a=M.anchored_query_only_minus_no_context_pp, b=M.context_over_own_query_path_pp;
-$('#decomp').innerHTML=`<div class="dbar" role="img" aria-label="Chênh lệch ${sgn(a+b)} điểm gồm ${sgn(a)} từ cách train anchored và ${sgn(b)} từ context"><span class="s1" style="width:${a/(a+b)*100}%">${sgn(a)} cách train</span><span class="s2" style="width:${b/(a+b)*100}%">${sgn(b)} context</span></div>
-<p class="prose" style="margin-top:14px">Khoảng hai phần ba đến từ cách train: TACS-X dù bỏ ảnh context vẫn hơn No-Context. Phần còn lại đến từ chính ảnh context mà selector chọn.</p>`;
+ps.innerHTML=`<thead><tr><th scope="col">Seed</th><th scope="col" class="n">No-Context</th><th scope="col" class="n">TACS-X<br>pool có nhãn</th><th scope="col" class="n">TACS-X<br>pool chưa gán nhãn</th><th scope="col" class="n">Hơn<br>No-Context</th></tr></thead>
+<tbody>${R.perSeed.map(s=>`<tr><th scope="row">${s.seed}</th><td class="n">${pct(s.no_context)}</td><td class="n">${pct(s.labeled)}</td><td class="n">${pct(s.unlabeled)}</td><td class="n"><span class="d ${s.vs_nc>0?'pos':'neg'}">${sgn(s.vs_nc)}</span></td></tr>`).join('')}</tbody>
+<tfoot><tr><th scope="row">Trung bình</th><td class="n">${pct(A[NC])}</td><td class="n">${pct(A[LAB])}</td><td class="n">${pct(A[BEST])}</td><td class="n"><span class="d pos">${sgn(V.difference_pp)}</span></td></tr></tfoot>`;
+const M=R.decomposition, a=M.training_pp, b=M.context_pp;
+$('#decomp').innerHTML=`<div class="dbar" role="img" aria-label="Chênh lệch ${sgn(a+b)} điểm gồm ${sgn(a)} từ cách train và ${sgn(b)} từ ảnh context lúc dự đoán"><span class="s1" style="width:${a/(a+b)*100}%">${sgn(a)} cách train</span><span class="s2" style="width:${b/(a+b)*100}%;min-width:76px;padding:0 10px">${sgn(b)}</span></div>
+<p class="prose" style="margin-top:14px">Gần như toàn bộ đến từ cách train: bỏ ảnh context ra, TACS-X vẫn hơn No-Context ${sgn(a,1)} điểm. Ảnh context lúc dự đoán chỉ thêm ${sgn(b,1)} điểm (ô vàng), chưa phân biệt được với 0 (CI 95% ${ci(M.context_ci95_pp)}).</p>`;
 $('#papercap').innerHTML=`Để tham khảo, paper báo cáo trên CUB đủ dữ liệu: No-Context ${pct(D.paper.no_context,1)}, TACS ${pct(D.paper.tacs,1)}.`;
 
 /* ---------- protocol ---------- */
@@ -497,7 +529,7 @@ $('#wt-intro').textContent=`Ảnh official test, rút ngẫu nhiên ${W.perGroup
 const STEPS=[
  {k:'input',t:'Input',d:'Resize về 224×224.'},
  {k:'tokens',t:'Patch tokens',d:'Lưới 14×14 patch, mỗi patch 384 chiều.'},
- {k:'pool',t:'Candidate pool',d:`So query với ${W.poolSize} ảnh train, không dùng nhãn.`},
+ {k:'pool',t:'Candidate pool',d:`So query với ${int(W.poolSize)} ảnh train, không dùng nhãn.`},
  {k:'selector',t:'Selector scores',d:'Softmax trên pool, lấy argmax.'},
  {k:'concat',t:'Token concat',d:'Nối patch tokens của query và context.'},
  {k:'predict',t:'ViT blocks + head',d:'Xác suất trên 200 loài.'},
@@ -526,7 +558,7 @@ function cells(ex,k){
     return [g, g];}
   case 'pool':{
     const grid=ex.candidates.map((c,j)=>`<div class="cand${j===0?' pick':''}"><img src="${img(c.img)}" alt="Candidate ${c.label}"><span class="r">#${j+1}</span><div class="lb">${sameMark(c)}${c.label}</div><div class="sv">cos ${fmt(c.score*.07,3)}</div></div>`).join('');
-    return [skip,`<div class="cands">${grid}</div><p class="cap">Chấm xanh: cùng loài với query.</p>`];}
+    return [skip,`<div class="cands">${grid}</div><p class="cap">Chấm xanh: cùng loài với query. Nhãn chỉ để hiển thị, mô hình không đọc.</p>`];}
   case 'selector':{
     const rows=ex.candidates.map((c,j)=>`<div class="sc${j===0?' pick':''}"><span class="rk">#${j+1}</span><img src="${img(c.img)}" alt=""><span class="lb">${sameMark(c)}${c.label}</span><span class="track"><span class="bar" data-w="${c.p/ex.candidates[0].p*100}"></span></span><span class="val">${pct(c.p,1)}</span></div>`).join('');
     return [skip,`<div class="scores" role="list" aria-label="Xác suất selector cho 8 candidate cao nhất">${rows}</div>
@@ -548,12 +580,12 @@ function cells(ex,k){
 }
 function makeTrace(root,ex){
   root.innerHTML='';
-  root.appendChild(el('div','lanes-head','<div></div><div>No-Context<small>chỉ ảnh query</small></div><div>Anchored TACS-X<small>query + 1 context được chọn</small></div>'));
+  root.appendChild(el('div','lanes-head','<div></div><div>No-Context<small>chỉ ảnh query</small></div><div>TACS-X<small>query + 1 context từ ảnh chưa gán nhãn</small></div>'));
   const rows=STEPS.map((s,i)=>{
     const r=el('div','srow'), [a,b]=cells(ex,s.k);
     r.appendChild(el('div','stitle',`<h3>${i+1}. ${s.t}</h3><p>${s.d}</p>`));
     const ca=el('div','cell',a);ca.dataset.lane='No-Context';
-    const cb=el('div','cell',b);cb.dataset.lane='Anchored TACS-X';
+    const cb=el('div','cell',b);cb.dataset.lane='TACS-X';
     r.append(ca,cb);root.appendChild(r);return r;
   });
   function show(n){rows.forEach((r,i)=>{r.classList.toggle('ahead',i>n);r.classList.toggle('now',i===n);r.querySelectorAll('.bar').forEach(x=>x.style.width=i<=n?x.dataset.w+'%':'0')})}
