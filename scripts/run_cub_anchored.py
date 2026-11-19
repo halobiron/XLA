@@ -54,8 +54,17 @@ from tacsx.models.tacs import TACSClassifier
 
 DATA_SEED = 42
 ARM_FLAGS = {"paper_tacs": {"aux_query_weight": 0.0, "abstain_gate": False},
-             "anchored_tacs": {"aux_query_weight": 1.0, "abstain_gate": True}}
-PRIMARY_READOUT = {"no_context": "query_only", "paper_tacs": "forced_context", "anchored_tacs": "forced_context"}
+             "anchored_tacs": {"aux_query_weight": 1.0, "abstain_gate": True},
+             "anchored_tacs_unlabeled": {"aux_query_weight": 1.0, "abstain_gate": True}}
+PRIMARY_READOUT = {"no_context": "query_only", "paper_tacs": "forced_context", "anchored_tacs": "forced_context",
+                   "anchored_tacs_unlabeled": "forced_context"}
+# Candidate pool per arm. "unlabeled": every image of the training split (labels never read),
+# identity-masked against queries; only defined in the low-data regime.
+ARM_POOL = {"anchored_tacs_unlabeled": "unlabeled"}
+
+
+def uses_unlabeled(args):
+    return any(ARM_POOL.get(a) == "unlabeled" for a in args.arms)
 
 
 # ----------------------------------------------------------------------------- utilities
@@ -128,11 +137,19 @@ def make_plan(args):
             "lr": {"lr_backbone": 1e-5, "lr_head": 3e-4, "lr_selector": 1e-4, "lr_gate": 1e-3},
             "weight_decay": .05, "scheduler": "cosine per phase", "amp": "fp16, TF32 off",
             "arm_flags": {a: ARM_FLAGS.get(a, {}) for a in args.arms},
-            "primary_endpoint": "official test: anchored_tacs forced_context minus no_context, mean over seeds, "
-                                "95% paired bootstrap over test queries (seed-averaged correctness)",
+            "primary_endpoint": ("official test: anchored_tacs_unlabeled forced_context minus anchored_tacs forced_context"
+                                 if uses_unlabeled(args) else
+                                 "official test: anchored_tacs forced_context minus no_context") +
+                                ", mean over seeds, 95% paired bootstrap over test queries (seed-averaged correctness)",
             "secondary": ["anchored_tacs gated readout", "paper_tacs forced_context", "per-seed differences",
                           "identity-filtered test subset"],
             "checkpoint_selection": "best validation accuracy of each arm's primary readout, earliest epoch on ties",
+            **({"unlabeled_pool": "anchored_tacs_unlabeled selects context from every training-split image "
+                                  "(validation excluded by identity); training labels outside the K-per-class "
+                                  "subset are never read; No-Context does not see these images",
+                "primary_comparison": "anchored_tacs_unlabeled:forced_context minus anchored_tacs:forced_context",
+                "key_secondary": "anchored_tacs_unlabeled:forced_context minus no_context"}
+               if uses_unlabeled(args) else {}),
             "smoke": {"max_steps": args.max_steps, "eval_limit": args.eval_limit} if args.max_steps or args.eval_limit else None,
             "deviations": ["TACS-X anchored extension (aux query-only CE + abstain gate) is not in the paper",
                            f"{args.warmup_epochs}+{args.epochs} epochs instead of 100; batch {args.batch_size} instead of 64; 224px instead of 256",
@@ -166,12 +183,15 @@ def register(output, args, data_root, weights):
 
 
 # ----------------------------------------------------------------------------- data
-def prepare(data_root, batch_size, workers, include_test=False, train_per_class=0):
+def prepare(data_root, batch_size, workers, include_test=False, train_per_class=0, unlabeled=False):
     train, val, test, pool = make_cub200_loaders(data_root, 224, .2, 1, batch_size, workers, DATA_SEED,
                                                  include_context=True)
     for loader in (train, val, test):
         loader.dataset.include_context = False  # full-pool selection; no sampled candidates
     clean = train.dataset.candidate_base
+    full_train = list(train.dataset.query_ids)
+    if unlabeled and not train_per_class:
+        raise ValueError("the unlabeled pool is defined only for the low-data regime")
     if train_per_class:
         # Low-data regime: first K ids per class of the (data-seed-shuffled)
         # training list; the context pool is exactly this labeled subset.
@@ -186,7 +206,8 @@ def prepare(data_root, batch_size, workers, include_test=False, train_per_class=
         pool_override = subset
     else:
         pool_override = None
-    ids = train.dataset.query_ids + val.dataset.query_ids + (test.dataset.query_ids if include_test else [])
+    ids = (full_train if unlabeled else train.dataset.query_ids) + val.dataset.query_ids + \
+        (test.dataset.query_ids if include_test else [])
     identities, groups = torch.full((len(clean),), -1, dtype=torch.long), {}
     for qid in ids:
         with Image.open(clean.root / "images" / clean.paths[qid]) as image:
@@ -199,13 +220,20 @@ def prepare(data_root, batch_size, workers, include_test=False, train_per_class=
     pool_ids = torch.tensor(pool_override if pool_override is not None else [item.index for item in pool.items])
     assert not set(pool_ids.tolist()) & set(kept)
     pixels = torch.stack([clean[int(i)][0] for i in pool_ids]).half().cuda()
+    pools = {"labeled": (pixels, pool_ids.cuda())}
     split = {"train_count": len(train.dataset), "validation_count": len(kept), "pool_count": len(pool_ids),
              "excluded_validation_duplicates": excluded}
+    if unlabeled:
+        val_groups = {int(identities[v]) for v in kept}
+        unl = [i for i in full_train if int(identities[i]) not in val_groups]
+        assert not set(unl) & set(kept) and set(train.dataset.query_ids) <= set(unl)
+        pools["unlabeled"] = (torch.stack([clean[int(i)][0] for i in unl]).half().cuda(), torch.tensor(unl).cuda())
+        split["unlabeled_pool_count"] = len(unl)
     if include_test:
-        seen = {int(identities[i]) for i in train.dataset.query_ids + val.dataset.query_ids}
+        seen = {int(identities[i]) for i in (full_train if unlabeled else train.dataset.query_ids) + val.dataset.query_ids}
         split["test_count"] = len(test.dataset)
         split["test_identical_to_training"] = [i for i in test.dataset.query_ids if int(identities[i]) in seen]
-    return train, val, test, pixels, pool_ids.cuda(), identities.cuda(), split
+    return train, val, test, pools, identities.cuda(), split
 
 
 # ----------------------------------------------------------------------------- models
@@ -365,8 +393,10 @@ def run_stage(args, data_root, weights, repo):
     started = time.perf_counter()
     try:
         status(output, state="preparing")
-        train, val, _, pixels, pool_ids, identities, split = prepare(data_root, args.batch_size, args.workers,
-                                                                        train_per_class=args.train_per_class)
+        train, val, _, pools, identities, split = prepare(data_root, args.batch_size, args.workers,
+                                                          train_per_class=args.train_per_class,
+                                                          unlabeled=uses_unlabeled(args))
+        pixels, pool_ids = pools["labeled"]
         dump(output / "split_audit.json", split)
         log(f"split {json.dumps({k: v for k, v in split.items() if not isinstance(v, list)})}")
         for seed in args.train_seeds:
@@ -385,7 +415,8 @@ def run_stage(args, data_root, weights, repo):
                     log(f"seed {seed}: {arm} already complete, skipping")
                     continue
                 model = make_arm(arm, warm, seed)
-                run_phase(arm, model, args.epochs, train, val, pixels, pool_ids, identities, seed,
+                arm_pixels, arm_pool = pools[ARM_POOL.get(arm, "labeled")]
+                run_phase(arm, model, args.epochs, train, val, arm_pixels, arm_pool, identities, seed,
                           args.warmup_epochs, args, seed_dir / arm)
                 del model
                 torch.cuda.empty_cache()
@@ -463,15 +494,17 @@ def test_stage(args, data_root, weights, repo):
         log("SMOKE protocol: test stage evaluates validation in place of the official test")
         original_open, _ = protect_test_images(data_root)
         try:
-            _, test, _, pixels, pool_ids, identities, split = prepare(data_root, args.batch_size, args.workers,
-                                                                      train_per_class=args.train_per_class)
+            _, test, _, pools, identities, split = prepare(data_root, args.batch_size, args.workers,
+                                                           train_per_class=args.train_per_class,
+                                                           unlabeled=uses_unlabeled(args))
         finally:
             Image.open = original_open
         split["test_identical_to_training"] = []
     else:
         log("TEST LOCK written; evaluating official test once")
-        _, _, test, pixels, pool_ids, identities, split = prepare(data_root, args.batch_size, args.workers, include_test=True,
-                                                                  train_per_class=args.train_per_class)
+        _, _, test, pools, identities, split = prepare(data_root, args.batch_size, args.workers, include_test=True,
+                                                       train_per_class=args.train_per_class,
+                                                       unlabeled=uses_unlabeled(args))
     dump(test_dir / "test_split_audit.json", {k: v for k, v in split.items()})
     identical = set(split["test_identical_to_training"])
     correct = {}
@@ -481,6 +514,7 @@ def test_stage(args, data_root, weights, repo):
             model = make_arm(arm, warm, seed)
             model.load_state_dict(torch.load(output / f"seed_{seed}" / arm / "checkpoint_best.pt",
                                              map_location="cpu", weights_only=False)["model"])
+            pixels, pool_ids = pools[ARM_POOL.get(arm, "labeled")]
             readouts, preds = evaluate(model, test, pixels, pool_ids, identities, args.eval_limit if smoke else 0)
             torch.save(preds, test_dir / f"predictions_seed{seed}_{arm}.pt")
             for name in ("query_only", "forced_context", "gated"):
@@ -504,7 +538,15 @@ def test_stage(args, data_root, weights, repo):
         arm_mean = np.mean(values, axis=0)
         result["comparisons"][key] = {"all": paired_bootstrap(nc, arm_mean),
                                       "identity_filtered": paired_bootstrap(nc[keep], arm_mean[keep])}
-    primary = result["comparisons"].get("anchored_tacs:forced_context", {}).get("all")
+    if "anchored_tacs_unlabeled:forced_context" in correct and "anchored_tacs:forced_context" in correct:
+        ref = np.mean(correct["anchored_tacs:forced_context"], axis=0)
+        new = np.mean(correct["anchored_tacs_unlabeled:forced_context"], axis=0)
+        result["comparisons"]["anchored_tacs_unlabeled_vs_anchored_tacs"] = {
+            "all": paired_bootstrap(ref, new), "identity_filtered": paired_bootstrap(ref[keep], new[keep])}
+        primary = result["comparisons"]["anchored_tacs_unlabeled_vs_anchored_tacs"]["all"]
+        result["key_secondary_vs_no_context"] = result["comparisons"]["anchored_tacs_unlabeled:forced_context"]["all"]
+    else:
+        primary = result["comparisons"].get("anchored_tacs:forced_context", {}).get("all")
     result["primary"] = primary
     result["primary_win"] = bool(primary and primary["ci95_pp"][0] > 0)
     dump(test_dir / "test_result.json", result)
@@ -522,7 +564,7 @@ def main():
     p.add_argument("--dinov3-repo", default=str(root / "third_party/dinov3"))
     p.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     p.add_argument("--arms", nargs="+", default=["no_context", "anchored_tacs"],
-                   choices=["no_context", "paper_tacs", "anchored_tacs"])
+                   choices=["no_context", "paper_tacs", "anchored_tacs", "anchored_tacs_unlabeled"])
     p.add_argument("--warmup-epochs", type=int, default=5)
     p.add_argument("--epochs", type=int, default=15)
     p.add_argument("--batch-size", type=int, default=16)

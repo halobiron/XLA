@@ -13,7 +13,8 @@ from pathlib import Path
 import shutil
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "outputs/kaggle/tacsx_cub_anchored"
+VARIANTS = {"anchored": ("tacsx_cub_anchored", "scripts/kaggle_cub_anchored_cell.py"),
+            "unlabeled": ("tacsx_cub_unlabeled", "scripts/kaggle_cub_unlabeled_cell.py")}
 WEIGHTS = "checkpoints/dinov3_vits16_pretrain_lvd1689m-08c60483.pth"
 
 
@@ -26,6 +27,11 @@ def sha(path):
 
 
 def main():
+    import argparse, zipfile
+    p = argparse.ArgumentParser()
+    p.add_argument("--variant", choices=VARIANTS, default="anchored")
+    name, cell = VARIANTS[p.parse_args().variant]
+    OUT = ROOT / "outputs/kaggle" / name
     if OUT.exists():
         shutil.rmtree(OUT)
     ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
@@ -36,12 +42,19 @@ def main():
     shutil.copy2(ROOT / "third_party/dinov3/LICENSE.md", OUT / "third_party/dinov3/LICENSE.md")
     (OUT / "checkpoints").mkdir()
     shutil.copy2(ROOT / WEIGHTS, OUT / WEIGHTS)
-    shutil.copy2(ROOT / "scripts/kaggle_cub_anchored_cell.py", OUT / "kaggle_cell.py")
+    shutil.copy2(ROOT / cell, OUT / "kaggle_cell.py")
     files = sorted(p for p in OUT.rglob("*") if p.is_file())
     manifest = {str(p.relative_to(OUT)).replace("\\", "/"): sha(p) for p in files}
     (OUT / "MANIFEST.json").write_text(json.dumps(manifest, indent=1), encoding="utf8")
     size = sum(p.stat().st_size for p in files) / 2**20
     print(f"Wrote {OUT} ({len(files)} files, {size:.1f} MiB)")
+    archive = OUT.with_suffix(".zip")
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in sorted(p for p in OUT.rglob("*") if p.is_file()):
+            z.write(f, f.relative_to(OUT).as_posix())
+    with zipfile.ZipFile(archive) as z:
+        assert not any("\\" in n for n in z.namelist()) and z.testzip() is None
+    print(f"Wrote {archive} ({archive.stat().st_size / 2**20:.1f} MiB, POSIX entry names)")
 
 
 if __name__ == "__main__":
