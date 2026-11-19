@@ -29,13 +29,32 @@ This is not a full-data win and not an exact paper reproduction. "Anchored" is a
 
 ## Offline demo
 
-Open `demo/index.html` by double-click; no server is needed. It shows the result, every explored regime, and a seven-step No-Context vs TACS-X walkthrough on official-test images. The examples are a seeded random sample per outcome group. Rebuild its data with:
+Open `demo/index.html` by double-click; no server is needed. The page has four sections:
+
+1. Setup and limits.
+2. The official-test result.
+3. The three changes that produced it: anchored training, the unlabeled context pool, and class-balanced self-training.
+4. A seven-step No-Context vs TACS-X walkthrough on official-test images, using a seeded random sample per outcome group.
+
+Rebuild its data with:
 
 ```powershell
 $env:PYTHONPATH="src"; .venv-gpu/Scripts/python.exe scripts/build_cub_demo.py
 ```
 
-The builder re-runs the seed-0 checkpoints and refuses to write if any rebuilt prediction differs from the saved Kaggle predictions.
+The builder re-runs the seed-10 self-trained checkpoints (`outputs/cub200_selftrain_v1`) and refuses to write if any rebuilt prediction differs from the saved predictions.
+
+### Try your own images
+
+Double-click `Mo-demo.bat` in the project root. Equivalent from a terminal:
+
+```powershell
+.venv-gpu/Scripts/python.exe scripts/serve_demo.py --open
+```
+
+After about a minute it opens `http://127.0.0.1:8765/demo/index.html`, where the walkthrough's "Ảnh của bạn" row gets an upload button. It runs both seed-10 models on your image against the 5,400-image training pool. Close the console window to stop the server.
+
+Uploads have no true label, so they get no right/wrong marks and no reward. The server needs a CUDA GPU, listens on localhost only, writes nothing to disk, and never reads the official test split.
 
 ## Download the dataset
 

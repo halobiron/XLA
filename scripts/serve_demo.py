@@ -1,6 +1,7 @@
 """Serve the TACS-X demo locally and run both models on images the user uploads.
 
-    .venv-gpu/Scripts/python.exe scripts/serve_demo.py            # then open the printed address
+    Mo-demo.bat                                                   # double-click: starts this and opens the page
+    .venv-gpu/Scripts/python.exe scripts/serve_demo.py --open      # same from a terminal
 
 The static page (demo/index.html) still opens offline by double-click; when it is served from here it
 also shows an upload button in the walkthrough. Uploaded images are traced through the same seven
@@ -22,6 +23,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import sys
 import threading
+import urllib.request
+import webbrowser
 
 HERE = Path(__file__).resolve()
 ROOT = HERE.parents[1]
@@ -185,7 +188,18 @@ def main():
     p.add_argument("--run", default=str(ROOT / "outputs/cub200_selftrain_v1"))
     p.add_argument("--seed", type=int, default=10)
     p.add_argument("--data-root", default=str(ROOT / "data/CUB_200_2011"))
+    p.add_argument("--open", action="store_true", help="open the page in the default browser when ready")
     a = p.parse_args()
+    url = f"http://127.0.0.1:{a.port}/demo/index.html"
+    try:  # already running (e.g. the launcher was double-clicked twice): just open the page
+        with urllib.request.urlopen(f"http://127.0.0.1:{a.port}/demo/api/health", timeout=2) as r:
+            if json.load(r).get("ok"):
+                print(f"Server already running: {url}", flush=True)
+                if a.open:
+                    webbrowser.open(url)
+                return
+    except OSError:
+        pass
     if not torch.cuda.is_available():
         raise SystemExit("CUDA GPU required (use .venv-gpu/Scripts/python.exe)")
     data = Path(a.data_root)
@@ -193,7 +207,9 @@ def main():
     print("Loading the pool (5,400 training images) and both checkpoints; this takes about a minute...", flush=True)
     engine = Engine(Path(a.run), a.seed, data)
     server = ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(engine))
-    print(f"Ready: http://127.0.0.1:{a.port}/demo/index.html  (Ctrl+C to stop)", flush=True)
+    print(f"Ready: {url}  (close this window or press Ctrl+C to stop)", flush=True)
+    if a.open:
+        webbrowser.open(url)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

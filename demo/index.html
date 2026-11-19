@@ -146,12 +146,15 @@ details.more summary:hover{color:var(--green)}
 .qbtn:hover{transform:translateY(-3px)}
 .qbtn[aria-pressed="true"]{border-color:var(--ink);outline:2px solid var(--brass);outline-offset:2px}
 .qbtn img{width:60px;height:60px;object-fit:cover;display:block}
-.upbtn{position:relative;display:inline-flex;align-items:center;height:66px;padding:0 18px;border-radius:4px}
+.poolhead{margin:0 0 10px;font:600 14px/1.4 var(--sans);color:var(--ink)}
+.btn.upbtn{position:relative;display:inline-flex;align-items:center;height:66px;padding:0 18px;border-radius:4px;border:2px dashed var(--ink);background:var(--paper);color:var(--ink)}
+.btn.upbtn:hover{background:#fff}
 .upbtn input{position:absolute;inset:0;opacity:0;cursor:pointer}
 .upbtn:focus-within{outline:3px solid var(--brass);outline-offset:3px}
 .upbtn.busy{opacity:.6;pointer-events:none}
 .upstat{align-self:center;font:400 14px/1.4 var(--sans);color:var(--ink-soft)}
-.uphint{margin:-14px 0 18px}
+.upoff{display:flex;align-items:center;min-height:66px;padding:10px 16px;border:2px dashed var(--card-edge);border-radius:4px;font:400 14px/1.4 var(--sans);color:var(--ink-soft);max-width:520px}
+.upoff b{color:var(--ink)}
 
 /* walkthrough: stepper */
 .stepbar{position:sticky;top:0;z-index:4;display:flex;flex-wrap:wrap;align-items:center;gap:14px;padding:12px 0;margin:0 0 8px;background:var(--card);border-bottom:1px solid #b9c0cf}
@@ -547,8 +550,8 @@ $('#wt-intro').textContent=`Hai mô hình sau self-training. Ảnh official test
 const STEPS=[
  {k:'input',t:'Input',d:'Resize về 224×224.'},
  {k:'tokens',t:'Patch tokens',d:'Lưới 14×14 patch, mỗi patch 384 chiều.'},
- {k:'pool',t:'Candidate pool',d:`So query với ${int(W.poolSize)} ảnh train, không dùng nhãn.`},
- {k:'selector',t:'Selector scores',d:'Softmax trên pool, lấy argmax.'},
+ {k:'pool',t:'Candidate pool',d:`Pool gồm ${int(W.poolSize)} ảnh train, không dùng nhãn. Ở đây hiện 8 ảnh giống query nhất.`},
+ {k:'selector',t:'Selector scores',d:`Đổi điểm của cả ${int(W.poolSize)} ảnh thành xác suất, chọn ảnh cao nhất làm context.`},
  {k:'concat',t:'Token concat',d:'Nối patch tokens của query và context.'},
  {k:'predict',t:'ViT blocks + head',d:'Xác suất trên 200 loài.'},
  {k:'reward',t:'Reward',d:'Chỉ dùng khi train.'},
@@ -575,8 +578,8 @@ function cells(ex,k){
     const g=`<div class="gridimg"><img src="${q}" alt="Ảnh 224×224 với lưới 14×14 patch"></div>`;
     return [g, g];}
   case 'pool':{
-    const grid=ex.candidates.map((c,j)=>`<div class="cand${j===0?' pick':''}"><img src="${img(c.img)}" alt="Candidate ${c.label}"><span class="r">#${j+1}</span><div class="lb">${sameMark(c)}${c.label}</div><div class="sv">cos ${fmt(c.score*.07,3)}</div></div>`).join('');
-    return [skip,`<div class="cands">${grid}</div><p class="cap">${ex.trueLabel?'Chấm xanh: cùng loài với query. ':''}Nhãn chỉ để hiển thị, mô hình không đọc.</p>`];}
+    const grid=ex.candidates.map((c,j)=>`<div class="cand"><img src="${img(c.img)}" alt="Candidate ${c.label}"><span class="r">#${j+1}</span><div class="lb">${sameMark(c)}${c.label}</div><div class="sv">cos ${fmt(c.score*.07,3)}</div></div>`).join('');
+    return [skip,`<p class="poolhead">8 trong ${int(ex.poolSize)} ảnh, xếp theo độ giống với query (cosine). Chưa chọn ảnh nào ở bước này.</p><div class="cands">${grid}</div><p class="cap">${ex.trueLabel?'Chấm xanh: cùng loài với query. ':''}Nhãn chỉ để hiển thị, mô hình không đọc.</p>`];}
   case 'selector':{
     const rows=ex.candidates.map((c,j)=>`<div class="sc${j===0?' pick':''}"><span class="rk">#${j+1}</span><img src="${img(c.img)}" alt=""><span class="lb">${sameMark(c)}${c.label}</span><span class="track"><span class="bar" data-w="${c.p/ex.candidates[0].p*100}"></span></span><span class="val">${pct(c.p,1)}</span></div>`).join('');
     return [skip,`<div class="scores" role="list" aria-label="Xác suất selector cho 8 candidate cao nhất">${rows}</div>
@@ -626,35 +629,35 @@ GROUPS.forEach(([g,label])=>{
   });
   row.appendChild(strip);$('#groups').appendChild(row);
 });
-/* live upload: only when the page is served by scripts/serve_demo.py */
-const upHint=el('p','cap uphint','Muốn thử ảnh của bạn: chạy <span class="num">python scripts/serve_demo.py</span> rồi mở địa chỉ nó in ra.');
-$('#groups').before(upHint);
-if(location.protocol.startsWith('http')){
-  fetch('api/health').then(r=>r.ok?r.json():null).then(h=>{
-    if(!h||!h.ok)return;
-    upHint.remove();
-    const row=el('div','grp up');
-    row.appendChild(el('div','grp-name',`Ảnh của bạn<small>dự đoán trực tiếp · seed ${h.seed}</small>`));
-    const strip=el('div','qstrip');strip.setAttribute('role','group');strip.setAttribute('aria-label','Ảnh của bạn');
-    const lab=el('label','btn upbtn','Tải ảnh lên<input type="file" accept="image/*">');
-    const st=el('span','upstat','');st.setAttribute('role','status');
-    strip.append(lab,st);row.appendChild(strip);$('#groups').prepend(row);
-    let n=0;
-    lab.querySelector('input').addEventListener('change',async ev=>{
-      const file=ev.target.files[0];if(!file)return;ev.target.value='';
-      st.textContent='Đang chạy hai mô hình…';lab.classList.add('busy');
-      try{
-        const res=await fetch('api/trace',{method:'POST',headers:{'Content-Type':file.type||'application/octet-stream'},body:file});
-        const out=await res.json();if(!res.ok)throw new Error(out.error||res.statusText);
-        Object.assign(D.images,out.images);
-        const e=out.example;e.id=-(++n);e.group='upload';
-        const b=el('button','qbtn');b.dataset.id=e.id;b.setAttribute('aria-pressed','false');b.setAttribute('aria-label',`Ảnh tải lên ${n}`);
-        b.innerHTML=`<img src="${img(e.query)}" alt="">`;b.onclick=()=>pick(e);strip.insertBefore(b,lab);
-        st.textContent='';pick(e);
-      }catch(err){st.textContent='Không chạy được: '+err.message}
-      finally{lab.classList.remove('busy')}
-    });
-  }).catch(()=>{});
+/* "Ảnh của bạn": always shown; live only when opened through Mo-demo.bat (scripts/serve_demo.py) */
+{
+const row=el('div','grp up');
+row.appendChild(el('div','grp-name','Ảnh của bạn<small>dự đoán trực tiếp</small>'));
+const strip=el('div','qstrip');strip.setAttribute('role','group');strip.setAttribute('aria-label','Ảnh của bạn');
+const off=el('div','upoff','<span>Để tải ảnh lên, mở demo bằng <b>Mo-demo.bat</b> ở thư mục gốc của dự án (double-click) thay vì index.html.</span>');
+strip.append(off);row.appendChild(strip);$('#groups').prepend(row);
+const enable=h=>{
+  off.remove();row.querySelector('small').textContent=`dự đoán trực tiếp · seed ${h.seed}`;
+  const lab=el('label','btn upbtn','Tải ảnh lên<input type="file" accept="image/*">');
+  const st=el('span','upstat','');st.setAttribute('role','status');
+  strip.append(lab,st);
+  let n=0;
+  lab.querySelector('input').addEventListener('change',async ev=>{
+    const file=ev.target.files[0];if(!file)return;ev.target.value='';
+    st.textContent='Đang chạy hai mô hình…';lab.classList.add('busy');
+    try{
+      const res=await fetch('api/trace',{method:'POST',headers:{'Content-Type':file.type||'application/octet-stream'},body:file});
+      const out=await res.json();if(!res.ok)throw new Error(out.error||res.statusText);
+      Object.assign(D.images,out.images);
+      const e=out.example;e.id=-(++n);e.group='upload';
+      const b=el('button','qbtn');b.dataset.id=e.id;b.setAttribute('aria-pressed','false');b.setAttribute('aria-label',`Ảnh tải lên ${n}`);
+      b.innerHTML=`<img src="${img(e.query)}" alt="">`;b.onclick=()=>pick(e);strip.insertBefore(b,lab);
+      st.textContent='';pick(e);
+    }catch(err){st.textContent='Không chạy được: '+err.message}
+    finally{lab.classList.remove('busy')}
+  });
+};
+if(location.protocol.startsWith('http'))fetch('api/health').then(r=>r.ok?r.json():null).then(h=>{if(h&&h.ok)enable(h)}).catch(()=>{});
 }
 const dots=$('#dots');
 STEPS.forEach((s,i)=>{const b=el('button','dot',String(i+1));b.title=s.t;b.setAttribute('aria-label',`Bước ${i+1}: ${s.t}`);b.onclick=()=>go(i);dots.appendChild(b)});

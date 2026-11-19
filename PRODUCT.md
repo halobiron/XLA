@@ -8,7 +8,7 @@ web
 
 ## Stack
 
-Static HTML/CSS/JS opened by double-click (no server, no network). A Python builder (`scripts/build_cub_demo.py`) bakes data from `outputs/` and the saved checkpoints into a local JS data file next to the page.
+Static HTML/CSS/JS opened by double-click (no server, no network). A Python builder (`scripts/build_cub_demo.py`) bakes data from `outputs/` and the saved checkpoints into a local JS data file next to the page. An optional local server (`scripts/serve_demo.py`, localhost only, CUDA) serves the same page and adds live inference on uploaded images.
 
 ## Users
 
@@ -53,7 +53,7 @@ Validation-only follow-ups (a second self-training round, 10 images per class) a
 
 ## Operating Context
 
-Presented live on a projector or laptop during a defense, and reopened later. No live model inference during the defense.
+Presented live on a projector or laptop during a defense, and reopened later. The page must work without the server. Live upload is an optional extra, decided with the user on 2026-11-19, and is never required for the result.
 
 Data sources:
 - **Headline:** `outputs/cub200_selftrain_v1/`, including `test/test_result.json`, the predictions, the checkpoints, `pseudo_labels.json` per seed and arm, and `amendments.json`.
@@ -64,9 +64,12 @@ Data sources:
 
 - Page order, decided with the user on 2026-11-19:
   1. **Thiết lập & giới hạn.** Short. The other data sizes sit in a collapsed panel.
-  2. **Kết quả.** One sentence plus the accuracy ladder, with per-seed numbers collapsed.
-  3. **Ba cải tiến.** One block per ladder row, each written as Vấn đề → Cách làm → Hiệu quả, plus the mechanism split.
-  4. **Từng bước.** The step-by-step inference walkthrough.
+  2. **Kết quả.** One sentence plus a per-seed dumbbell chart (No-Context dot to TACS-X dot), mean row last.
+  3. **Ba cải tiến.** One row per change, in three columns: Vấn đề (with a visual) → Cách làm (with a visual) → Hiệu quả (a before→after arrow on one shared scale).
+     - Step 1 shows trained and untrained branches.
+     - Step 2 shows a unit chart of the pool.
+     - Step 3 shows a seeded-random species with its 2 labeled and 5 pseudo-labeled images, each marked right or wrong.
+  4. **Từng bước.** The step-by-step inference walkthrough. When served by `scripts/serve_demo.py`, it also accepts an uploaded image: no true label, so no right/wrong marks and no reward; near-duplicate pool images are masked.
 - Write in plain language. A section title must say what the reader learns, not name a technique.
 - Walkthrough examples come from the official CUB test split. They are a seeded random sample per outcome group, never hand-picked: TACS-X fixes, TACS-X breaks, both right, both wrong. The size of each group is shown. The checkpoints are the self-trained seed-10 models.
 - Protocol facts:
