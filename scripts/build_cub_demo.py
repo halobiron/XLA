@@ -144,6 +144,10 @@ def results(run):
                           "training_ci95_pp": test["secondary"]["tacs_pl_query_only_vs_nc_pl"]["ci95_pp"],
                           "context_pp": context["difference_pp"], "context_ci95_pp": context["ci95_pp"]},
         "distinctContexts": float(np.mean(distinct)),
+        "distinctTeacherContexts": {arm: float(np.mean([len(set(torch.load(TEACHER_RUN / "test" / f"predictions_seed{s}_{arm}.pt",
+                                                                          weights_only=False)["context_id"].tolist()))
+                                                        for s in seeds]))
+                                    for arm in ("anchored_tacs", "anchored_tacs_unlabeled")},
         "pseudo": {k: {"count": float(np.mean([p["count"] for p in v])),
                        "precision": float(np.mean([p["precision_diagnostic_only"] for p in v])), "perClass": 5}
                    for k, v in pseudo.items()},
@@ -214,7 +218,7 @@ def main():
     sample = [(g, int(j)) for i, g in enumerate(GROUPS)
               for j in rng.choice(np.flatnonzero(group_of == i), PER_GROUP, replace=False)]
 
-    _, _, test, pools, identities, _ = rca.prepare(data, 16, 0, include_test=True,
+    train, _, test, pools, identities, _ = rca.prepare(data, 16, 0, include_test=True,
                                                    train_per_class=plan["train_per_class"], unlabeled=True)
     pixels, pool_ids = pools["unlabeled"]
     clean = test.dataset.candidate_base
@@ -271,7 +275,22 @@ def main():
         h = load_json(ROOT / f"outputs/cub200_anchored_dev_s42/seed_42/{arm}/history.json")
         curves[arm] = [r["validation"]["query_only"] for r in h]
     history["query_only_curves_full_data"] = curves
-    payload = {"results": results(run), "regimes": regimes(), "history": history,
+    # Step-3 illustration: one seeded-random species, its 2 labeled images and the pseudo-labels the
+    # seed's TACS-X teacher gave it (true labels are read only to mark each pseudo-label right/wrong).
+    pseudo = load_json(run / f"seed_{seed}" / "tacs_pl" / "pseudo_labels.json")
+    by_class = {}
+    for i, y in zip(pseudo["ids"], pseudo["labels"]):
+        by_class.setdefault(y, []).append(i)
+    full = sorted(c for c, v in by_class.items() if len(v) == 5)
+    species = int(np.random.default_rng(SAMPLE_SEED).choice(full))
+    labeled_ids = [i for i in train.dataset.query_ids if clean.targets[i] == species]
+    selftrain_example = {
+        "species": names[species], "labeled": [img_ref(i, 112) for i in labeled_ids],
+        "pseudo": [{"img": img_ref(i, 112), "correct": clean.targets[i] == species, "trueLabel": names[clean.targets[i]]}
+                   for i in by_class[species]],
+        "seed": seed, "classesWithFive": len(full)}
+
+    payload = {"results": results(run), "selftrainExample": selftrain_example, "regimes": regimes(), "history": history,
                "paper": {"no_context": .821, "tacs": .852, "source": "Bảng 2, CUB, đủ dữ liệu, 100 epoch, 3 seed"},
                "walkthrough": {"seed": seed, "counts": counts, "perGroup": PER_GROUP, "sampleSeed": SAMPLE_SEED,
                                "poolSize": int(len(pool_ids)), "rebuiltMatchesSaved": f"{len(examples)}/{len(examples)}",
