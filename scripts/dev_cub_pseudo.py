@@ -48,10 +48,14 @@ def main():
     p.add_argument("--frac", type=float, default=0.3, help="global top fraction by confidence (if --per-class 0)")
     p.add_argument("--per-class", type=int, default=0,
                    help="class-balanced: keep the K most confident images per predicted class")
-    p.add_argument("--epochs", type=int, default=16, help="16 x 1,900 images ~ the 75 x 400 step budget")
+    p.add_argument("--epochs", type=int, default=0,
+                   help="0 = the shared 30,000-image budget divided by the student's train size")
+    p.add_argument("--k", type=int, default=2, help="labeled images per class (matching dev warm-up must exist)")
+    p.add_argument("--out", default="outputs/cub200_k2_variants")
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--warm", default="outputs/cub200_lowdata2_dev_s42")
+    p.add_argument("--warm", default="")
     a = p.parse_args()
+    a.warm = a.warm or f"outputs/cub200_lowdata{a.k}_dev_s42"
     root = HERE.parents[1]
     data = root / "data/CUB_200_2011"
     data = data / "CUB_200_2011" if (data / "CUB_200_2011").is_dir() else data
@@ -59,11 +63,11 @@ def main():
     repo = root / "third_party/dinov3"
     torch.set_float32_matmul_precision("highest")
     torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = False
-    out = Path("outputs/cub200_k2_variants") / a.name
+    out = Path(a.out) / a.name
     out.mkdir(parents=True, exist_ok=True)
 
     orig, audit = R.protect_test_images(data)
-    train, val, _, pools, ident, split = R.prepare(data, 16, 0, train_per_class=2, unlabeled=True)
+    train, val, _, pools, ident, split = R.prepare(data, 16, 0, train_per_class=a.k, unlabeled=True)
     pixels, pool_ids = pools["unlabeled"]
     labeled = set(train.dataset.query_ids)
     unl_pos = torch.tensor([j for j, i in enumerate(pool_ids.tolist()) if i not in labeled]).cuda()
@@ -90,6 +94,9 @@ def main():
             take[idx[conf[idx].argsort(descending=True)[:a.per_class]]] = True
     else:
         take = conf >= conf.quantile(1 - a.frac)
+    if (len(labeled) + int(take.sum())) % 16 == 1:  # same guard as amendment 1: no final batch of one
+        sel = take.nonzero().squeeze(1)
+        take[sel[conf[sel].argmin()]] = False
     pseudo_ids = pool_ids[unl_pos[take]].tolist()
     pseudo_labels = pred[take].tolist()
 
@@ -107,6 +114,7 @@ def main():
     subset.indices = train.dataset.query_ids
     assert not set(pseudo_ids) & set(val.dataset.query_ids)
 
+    a.epochs = a.epochs or round(30000 / len(train.dataset))
     R.dump(out / "config.json", {**vars(a), "pseudo_count": len(pseudo_ids), "train_count": len(train.dataset),
                                  "pseudo_precision_diagnostic": precision,
                                  "pseudo_classes": len(set(pseudo_labels)), "scope": "validation only"})
@@ -114,7 +122,7 @@ def main():
           f"train {len(train.dataset)}", flush=True)
 
     args = argparse.Namespace(seeds=[a.seed], arms=["no_context", "anchored_tacs"], warmup_epochs=5,
-                              epochs=a.epochs, batch_size=16, train_per_class=2, max_steps=0, eval_limit=0,
+                              epochs=a.epochs, batch_size=16, train_per_class=a.k, max_steps=0, eval_limit=0,
                               output_path=out)
     R.STATUS_NAME = "status.json"
     train.dataset.seed = a.seed
