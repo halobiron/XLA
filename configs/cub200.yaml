@@ -30,7 +30,6 @@ backbone:
   pair_rope_layout: horizontal
 
 selector:
-  projection: false
   tau: 0.1
   abstain_gate: false     # TACS-X anchored extension; paper: always uses context
 

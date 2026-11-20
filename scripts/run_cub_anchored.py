@@ -239,7 +239,7 @@ def prepare(data_root, batch_size, workers, include_test=False, train_per_class=
 # ----------------------------------------------------------------------------- models
 def build_warm_model(weights, repo, seed):
     cfg = {"backbone": {"weights": str(weights), "repo_dir": str(repo), "freeze": False, "pair_rope_layout": "horizontal"},
-           "data": {"num_classes": 200}, "selector": {"projection": False}, "policy": {"lambda_policy": 1.}}
+           "data": {"num_classes": 200}, "selector": {}, "policy": {"lambda_policy": 1.}}
     set_seed(seed)
     return build_model(cfg, False, include_selector=False).cuda()
 
@@ -249,7 +249,7 @@ def make_arm(arm, warm, seed):
     set_seed(seed + 7)  # paired gate initialization
     if arm == "no_context":
         return TACSClassifier(None, task).cuda()
-    return TACSClassifier(TACSSelector(task.backbone, projection=False), task, tau=.1, lambda_policy=1.,
+    return TACSClassifier(TACSSelector(task.backbone), task, tau=.1, lambda_policy=1.,
                           **ARM_FLAGS[arm]).cuda()
 
 

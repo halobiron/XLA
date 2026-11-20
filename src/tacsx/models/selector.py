@@ -4,20 +4,6 @@ from torch import nn
 import torch.nn.functional as F
 
 
-class ResidualSelectorProjection(nn.Module):
-    """Identity-initialized nonlinear metric; explicit selector ablation."""
-
-    def __init__(self, dim):
-        super().__init__()
-        self.hidden = nn.Linear(dim, dim)
-        self.output = nn.Linear(dim, dim)
-        nn.init.zeros_(self.output.weight)
-        nn.init.zeros_(self.output.bias)
-
-    def forward(self, features):
-        return features + self.output(F.gelu(self.hidden(features)))
-
-
 class TACSSelector(nn.Module):
     """Generic selector independent of a specific DINOv3 API.
 
@@ -26,18 +12,9 @@ class TACSSelector(nn.Module):
       embedding_dim: int
     """
 
-    def __init__(self, encoder: nn.Module, projection: bool = True):
+    def __init__(self, encoder: nn.Module):
         super().__init__()
         self.encoder = encoder
-        dim = int(encoder.embedding_dim)
-        self.projector = (
-            nn.Sequential(
-                nn.Linear(dim, dim),
-                nn.GELU(),
-                nn.Linear(dim, dim),
-            )
-            if projection else nn.Identity()
-        )
 
     def forward(self, query: torch.Tensor, candidates: torch.Tensor) -> torch.Tensor:
         if candidates.ndim != 5:
@@ -49,8 +26,8 @@ class TACSSelector(nn.Module):
         zq = self.encoder.encode_global(query)
         zc = self.encoder.encode_global(candidates.reshape(b*n, c, h, w)).reshape(b, n, -1)
 
-        zq = F.normalize(self.projector(zq), dim=-1)
-        zc = F.normalize(self.projector(zc), dim=-1)
+        zq = F.normalize(zq, dim=-1)
+        zc = F.normalize(zc, dim=-1)
         return torch.einsum("bd,bnd->bn", zq, zc)
 
 

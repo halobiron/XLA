@@ -46,7 +46,6 @@ Exit:
 
 Implement:
 - selector;
-- projection;
 - scores;
 - ST Gumbel-Softmax;
 - context extraction.

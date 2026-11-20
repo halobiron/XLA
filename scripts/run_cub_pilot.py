@@ -137,11 +137,11 @@ def prepare(output):
 def models():
     cfg = {"backbone": {"weights": str(ROOT / "checkpoints/dinov3_vits16_pretrain_lvd1689m-08c60483.pth"),
                          "repo_dir": str(ROOT / "third_party/dinov3"), "freeze": False, "pair_rope_layout": "horizontal"},
-           "data": {"num_classes": 200}, "selector": {"projection": False}, "policy": {"lambda_policy": 1.}}
+           "data": {"num_classes": 200}, "selector": {}, "policy": {"lambda_policy": 1.}}
     set_seed(42)
     baseline = build_model(cfg, False, include_selector=False).cuda()
     task = copy.deepcopy(baseline.task_model)
-    full = TACSClassifier(TACSSelector(task.backbone, projection=False), task, tau=.1, lambda_policy=1.).cuda()
+    full = TACSClassifier(TACSSelector(task.backbone), task, tau=.1, lambda_policy=1.).cuda()
     assert all(torch.equal(a, b) for a, b in zip(baseline.task_model.state_dict().values(), task.state_dict().values()))
     return {"no_context": baseline, "full_tacs": full}
 

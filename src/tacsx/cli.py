@@ -83,7 +83,7 @@ def build_model(cfg, allow_random_backbone: bool, include_selector: bool = True)
     else:
         selector_adapter = DINOv3Adapter(back["repo_dir"], **kwargs)
         _freeze(selector_adapter, back.get("freeze", False), int(back.get("unfreeze_last_n_blocks", 0)))
-    selector = TACSSelector(selector_adapter, projection=cfg["selector"].get("projection", True))
+    selector = TACSSelector(selector_adapter)
     topk = cfg.get("topk", {})
     return TACSClassifier(selector, task, tau=float(cfg["selector"].get("tau", .1)), lambda_policy=float(cfg["policy"].get("lambda_policy", 1.0)), topk_k=int(topk.get("k", 2)), adaptive_threshold=float(topk.get("adaptive_threshold", .9)), eval_selection=cfg.get("evaluation", {}).get("selection", "argmax"),
                           aux_query_weight=float(cfg["policy"].get("aux_query_weight", 0.0)),

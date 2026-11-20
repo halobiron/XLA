@@ -32,7 +32,7 @@ class DummyTask(nn.Module):
 
 def _model(**kwargs):
     torch.manual_seed(0)
-    return TACSClassifier(TACSSelector(DummyEncoder(), projection=False), DummyTask(), **kwargs)
+    return TACSClassifier(TACSSelector(DummyEncoder()), DummyTask(), **kwargs)
 
 
 def _batch():

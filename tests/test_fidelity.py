@@ -179,7 +179,7 @@ def test_cub_classifier_has_200_classes_and_shared_trainable_backbone(monkeypatc
     from tacsx import cli
     monkeypatch.setattr(cli, "DINOv3Adapter", lambda *args, **kwargs: DummyEncoder())
     cfg = {"backbone": {"weights": "dummy", "repo_dir": "dummy", "share_selector_backbone": True},
-           "data": {"num_classes": 200}, "selector": {"projection": False}, "policy": {}}
+           "data": {"num_classes": 200}, "selector": {}, "policy": {}}
     model = cli.build_model(cfg, False)
     assert model.task_model.head.out_features == 200
     assert model.selector.encoder is model.task_model.backbone

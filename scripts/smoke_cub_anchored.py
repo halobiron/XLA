@@ -165,7 +165,7 @@ def main():
             pilot.set_seed(42)
             train.generator.manual_seed(42)
             task = copy.deepcopy(baseline.task_model)
-            model = TACSClassifier(TACSSelector(task.backbone, projection=False), task, tau=.1,
+            model = TACSClassifier(TACSSelector(task.backbone), task, tau=.1,
                                    lambda_policy=1., **flags).cuda()
             before = evaluate(model, val, pixels, pool_ids, identities, args.eval_batches)
             rows, cost = train_steps(name, model, train, pixels, pool_ids, identities, args.steps)

@@ -60,7 +60,7 @@ def test_param_groups_use_separate_learning_rates():
 
 
 def test_selector_shape():
-    selector = TACSSelector(DummyEncoder(), projection=False)
+    selector = TACSSelector(DummyEncoder())
     q = torch.randn(3, 3, 16, 16)
     c = torch.randn(3, 5, 3, 16, 16)
     assert selector(q, c).shape == (3, 5)
@@ -138,7 +138,7 @@ class DummyTask(nn.Module):
 
 
 def test_all_required_model_modes_smoke():
-    model = TACSClassifier(TACSSelector(DummyEncoder(), projection=False), DummyTask())
+    model = TACSClassifier(TACSSelector(DummyEncoder()), DummyTask())
     q, c, labels = torch.randn(3, 3, 8, 8), torch.randn(3, 4, 3, 8, 8), torch.tensor([0, 1, 0])
     scores = model.selector(q, c)
     for mode in ("no_context", "random_context", "dino_similarity", "gumbel_only", "policy_only", "full_tacs", "topk_tacs", "adaptive_topk_tacs"):
@@ -147,7 +147,7 @@ def test_all_required_model_modes_smoke():
 
 
 def test_topk_modes_expose_complete_context_metadata():
-    model = TACSClassifier(TACSSelector(DummyEncoder(), projection=False), DummyTask(), topk_k=2)
+    model = TACSClassifier(TACSSelector(DummyEncoder()), DummyTask(), topk_k=2)
     q, c, labels = torch.randn(3, 3, 8, 8), torch.randn(3, 4, 3, 8, 8), torch.tensor([0, 1, 0])
     scores = model.selector(q, c)
     for mode in ("topk_tacs", "adaptive_topk_tacs"):
@@ -160,7 +160,7 @@ def test_topk_modes_expose_complete_context_metadata():
 
 
 def test_evaluator_records_all_topk_candidates_and_weights():
-    model = TACSClassifier(TACSSelector(DummyEncoder(), projection=False), DummyTask(), topk_k=2)
+    model = TACSClassifier(TACSSelector(DummyEncoder()), DummyTask(), topk_k=2)
     batch = {
         "query": torch.randn(2, 3, 8, 8), "label": torch.tensor([0, 1]),
         "query_id": torch.tensor([50000, 50001]),
@@ -181,7 +181,7 @@ def test_evaluator_records_all_topk_candidates_and_weights():
 
 
 def test_policy_only_records_the_sampled_action_and_context():
-    model = TACSClassifier(TACSSelector(DummyEncoder(), projection=False), DummyTask())
+    model = TACSClassifier(TACSSelector(DummyEncoder()), DummyTask())
     q, c = torch.randn(3, 3, 8, 8), torch.randn(3, 4, 3, 8, 8)
     labels = torch.tensor([0, 1, 0])
     out = model.run_mode("policy_only", q, c, labels)

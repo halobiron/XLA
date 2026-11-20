@@ -225,7 +225,7 @@ def run(output):
         torch.cuda.empty_cache()
         train_arm(output, arms["no_context"], "warmup", train, val, pixels, pool_ids, identities, 2, 3)
         task = copy.deepcopy(arms["no_context"].task_model)
-        arms["full_tacs"] = TACSClassifier(TACSSelector(task.backbone, projection=False), task, tau=.1, lambda_policy=1.).cuda()
+        arms["full_tacs"] = TACSClassifier(TACSSelector(task.backbone), task, tau=.1, lambda_policy=1.).cuda()
         assert all(torch.equal(a, b) for a, b in zip(task.state_dict().values(), arms["no_context"].task_model.state_dict().values()))
         assert arms["full_tacs"].selector.encoder is task.backbone
         pilot.dump(output / "initialization_audit.json", {"identical_supervised_task_weights": True,

@@ -27,7 +27,6 @@ from PIL import Image
 
 import run_cub_quick_check as quick
 from tacsx.data.context import ContextDataset
-from tacsx.models.selector import ResidualSelectorProjection
 from tacsx.models.utility_selector import UtilitySelector, expected_context_loss
 
 pilot = quick.pilot
@@ -79,13 +78,9 @@ def make_splits(train_ids, pool_ids, identities, targets, fit_per_class=12, hold
 
 
 class CosineMetric(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.projection = ResidualSelectorProjection(384)
-
     def forward(self, query_features, candidate_features):
-        q = F.normalize(self.projection(query_features.float()), dim=-1)
-        c = F.normalize(self.projection(candidate_features.float()), dim=-1)
+        q = F.normalize(query_features.float(), dim=-1)
+        c = F.normalize(candidate_features.float(), dim=-1)
         return torch.einsum("bd,bkd->bk", q, c) / .07
 
 
