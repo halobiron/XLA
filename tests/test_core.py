@@ -50,7 +50,7 @@ def test_param_groups_use_separate_learning_rates():
     class M(nn.Module):
         def __init__(self):
             super().__init__()
-            self.selector = nn.Module(); self.selector.encoder = nn.Linear(2, 2); self.selector.projector = nn.Linear(2, 2)
+            self.selector = nn.Module(); self.selector.encoder = nn.Linear(2, 2)
             self.task_model = nn.Module(); self.task_model.backbone = nn.Linear(2, 2); self.task_model.head = nn.Linear(2, 2)
 
     groups = {g["name"]: g for g in param_groups(M(), {"lr_head": 3e-4, "lr_selector": 1e-4, "lr_backbone": 1e-5})}

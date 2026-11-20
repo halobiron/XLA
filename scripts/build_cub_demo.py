@@ -28,7 +28,6 @@ import torch.nn.functional as F
 from PIL import Image
 
 import run_cub_anchored as rca
-from tacsx.models.tacs import gate_features
 
 ROOT = Path(__file__).resolve().parents[1]
 GROUPS = ("fixed", "broken", "both", "neither")
@@ -166,7 +165,6 @@ def trace(nc, tacs, image_tensor, qid, label, pixels, pool_ids, identities, pool
         scores = rca.utility(tacs, q, features, torch.tensor([qid]), pool_ids, identities).float()
         action = scores.argmax(-1)
         ctx = tacs.task_model(q, pixels[action]).float()
-        gate_logit = tacs.gate(gate_features(base, ctx, scores)).float()
         tokens_q = tacs.task_model.backbone.prepare_tokens(q).tokens.shape[1]
     probs = scores.softmax(-1)[0]
     finite = torch.isfinite(scores[0])
@@ -188,8 +186,7 @@ def trace(nc, tacs, image_tensor, qid, label, pixels, pool_ids, identities, pool
         "pick": 0, "entropy": entropy, "maxEntropy": math.log(int(finite.sum())), "poolSize": int(finite.sum()),
         "noContext": {"top": topn(nc_logits), "correct": int(nc_logits.argmax()) == label, "ce": ce(nc_logits)},
         "tacs": {"top": topn(ctx), "correct": int(ctx.argmax()) == label, "ce": ce(ctx),
-                 "queryOnly": {"top": topn(base, 3), "correct": int(base.argmax()) == label, "ce": ce(base)},
-                 "gateLogit": float(gate_logit[0]), "gateUsesContext": bool(gate_logit[0] >= 0)},
+                 "queryOnly": {"top": topn(base, 3), "correct": int(base.argmax()) == label, "ce": ce(base)}},
     }
 
 

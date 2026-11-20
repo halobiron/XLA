@@ -37,7 +37,6 @@ from PIL import Image, UnidentifiedImageError
 import build_cub_demo as B
 import run_cub_anchored as R
 from tacsx.data.cub200 import image_transform
-from tacsx.models.tacs import gate_features
 
 MAX_UPLOAD = 15 * 2**20
 DUP_COS = 0.995
@@ -87,7 +86,6 @@ class Engine:
             scores = (cos * (1 / .07)).masked_fill(cos >= DUP_COS, -torch.inf).float()
             action = scores.argmax(-1)
             ctx = tacs.task_model(q, self.pixels[action]).float()
-            gate_logit = tacs.gate(gate_features(base, ctx, scores)).float()
             tokens_q = tacs.task_model.backbone.prepare_tokens(q).tokens.shape[1]
         probs = scores.softmax(-1)[0]
         finite = torch.isfinite(scores[0])
@@ -120,8 +118,7 @@ class Engine:
             "masked_near_duplicates": int((~finite).sum()),
             "noContext": {"top": topn(nc_logits), "correct": None, "ce": None},
             "tacs": {"top": topn(ctx), "correct": None, "ce": None,
-                     "queryOnly": {"top": topn(base, 3), "correct": None, "ce": None},
-                     "gateLogit": float(gate_logit[0]), "gateUsesContext": bool(gate_logit[0] >= 0)},
+                     "queryOnly": {"top": topn(base, 3), "correct": None, "ce": None}},
         }
         return {"example": example, "images": images}
 

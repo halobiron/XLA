@@ -69,8 +69,8 @@ def test_full_task_reward_and_policy_use_the_same_action():
                                      allow_unused=True, retain_graph=True)
     assert all(grad is None for grad in task_grads)
     (out.task_loss + out.policy_loss).backward()
-    assert model.selector.projector[0].weight.grad is not None
-    assert torch.isfinite(model.selector.projector[0].weight.grad).all()
+    assert model.selector.encoder.linear.weight.grad is not None
+    assert torch.isfinite(model.selector.encoder.linear.weight.grad).all()
 
 
 @pytest.mark.parametrize("threshold,expected_k", [(0.5, 2), (0.7, 3), (0.9, 4), (1., 4)])

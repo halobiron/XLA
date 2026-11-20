@@ -28,7 +28,7 @@ Output:
 
 Reference implementation:
 - shared encoder;
-- optional small projection head;
+- direct cosine similarity on the shared encoder features (no projection head in the current implementation);
 - L2 normalize;
 - dot-product/cosine utility.
 
