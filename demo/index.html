@@ -196,7 +196,7 @@ details.more summary:hover{color:var(--green)}
 .arrow{width:26px;height:16px;stroke:var(--ink-soft);fill:none;stroke-width:2;flex:none}
 .gridimg{position:relative;width:168px;height:168px;border:2px solid var(--ink)}
 .gridimg img{width:100%;height:100%;display:block}
-.gridimg::after{content:"";position:absolute;inset:0;background-image:linear-gradient(#ffffff99 1px,transparent 1px),linear-gradient(90deg,#ffffff99 1px,transparent 1px);background-size:calc(100%/14) calc(100%/14)}
+.patch-grid::after{content:"";position:absolute;inset:0;background-image:linear-gradient(#ffffff99 1px,transparent 1px),linear-gradient(90deg,#ffffff99 1px,transparent 1px);background-size:calc(100%/14) calc(100%/14);pointer-events:none}
 .gridimg.sm{width:120px;height:120px}
 .tokbar{display:flex;height:34px;border:2px solid var(--ink);margin:10px 0 6px;max-width:100%}
 .tokbar span{display:flex;align-items:center;justify-content:center;font:700 12px/1 var(--type);overflow:hidden;white-space:nowrap}
@@ -221,7 +221,8 @@ details.more summary:hover{color:var(--green)}
 .same-mark{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:4px;vertical-align:1px}
 
 .scores{display:flex;flex-direction:column;gap:3px}
-.sc{display:grid;grid-template-columns:34px 34px minmax(90px,170px) minmax(0,1fr) 58px;gap:8px;align-items:center;font:500 12px/1.2 var(--sans);padding:2px 4px;border-radius:3px}
+.sc{display:grid;grid-template-columns:28px 34px minmax(80px,150px) 60px minmax(0,1fr) 58px;gap:8px;align-items:center;font:500 12px/1.2 var(--sans);padding:3px 4px;border-radius:3px}
+.sc .cos{font:500 11px/1 var(--type);color:var(--ink-soft);text-align:right}
 .sc img{width:34px;height:34px;object-fit:cover;display:block}
 .sc .rk{font:700 12px/1 var(--type)}
 .sc .lb{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -291,7 +292,7 @@ details.more summary:hover{color:var(--green)}
   .grp{grid-template-columns:1fr;gap:6px}
   .stepbar{top:52px}
   .nav{margin-left:0}
-  .sc{grid-template-columns:28px 30px minmax(60px,1fr) minmax(0,1fr) 50px}
+  .sc{grid-template-columns:24px 30px minmax(50px,1fr) 44px minmax(42px,.7fr) 44px;gap:5px}
 }
 </style>
 </head>
@@ -550,13 +551,13 @@ const C=W.counts;
 $('#callno2').innerHTML=`checkpoint seed ${W.seed}`;
 $('#wt-intro').textContent=`Hai mô hình sau self-training. Ảnh official test, rút ngẫu nhiên ${W.perGroup} ảnh mỗi nhóm.`;
 const STEPS=[
- {k:'input',t:'Input',d:'Resize về 224×224.'},
- {k:'tokens',t:'Patch tokens',d:'Lưới 14×14 patch, mỗi patch 384 chiều.'},
- {k:'pool',t:'Candidate pool',d:`Selector chấm độ giống giữa query và từng ảnh trong ${int(W.poolSize)} ảnh train, chỉ dựa vào ảnh.`},
- {k:'selector',t:'Selector scores',d:`Đổi điểm của cả ${int(W.poolSize)} ảnh thành xác suất, chọn ảnh cao nhất làm context.`},
- {k:'concat',t:'Token concat',d:'Nối patch tokens của query và context.'},
- {k:'predict',t:'ViT blocks + head',d:'Xác suất trên 200 loài.'},
- {k:'reward',t:'Reward',d:'Chỉ dùng khi train.'},
+ {k:'input',t:'Ảnh query',d:'Ảnh được resize về 224×224 để đưa vào DINOv3; chưa cắt thành các ảnh nhỏ.'},
+ {k:'tokens',t:'DINOv3 chia ảnh thành patch',d:'Lưới 14×14 patch (196 patch tokens), mỗi patch được mã hóa thành vector 384 chiều.'},
+ {k:'pool',t:'Selector chấm điểm candidate',d:`DINOv3 lấy vector đặc trưng global (CLS) của query và từng ảnh trong ${int(W.poolSize)} ảnh train chưa gán nhãn. Selector chuẩn hóa vector rồi tính cosine similarity; đây là điểm và thứ hạng candidate.`},
+ {k:'selector',t:'Chọn một context',d:'Cosine scores thành xác suất bằng softmax trên pool. Ở demo suy luận, ảnh có điểm cao nhất được chọn; khi train, TACS lấy mẫu/Gumbel để học từ reward.'},
+ {k:'concat',t:'Downstream nhận hai ảnh',d:'Nối patch tokens của query và context thành một chuỗi để ViT xử lý cùng nhau.'},
+ {k:'predict',t:'Downstream dự đoán loài',d:'Các ViT blocks và classifier tạo xác suất cho 200 loài chim.'},
+ {k:'reward',t:'So loss để tính reward',d:'Reward = CE(query-only) − CE(query + context). Chỉ tính được khi biết nhãn thật.'},
 ];
 const arrow='<svg class="arrow" viewBox="0 0 26 16" aria-hidden="true"><path d="M1 8h22M17 2l6 6-6 6"/></svg>';
 const PREFIX=5, PATCH=196;
@@ -577,15 +578,15 @@ function cells(ex,k){
     const v=`<div class="pre"><figure><img class="orig" src="${ex.original}" alt="Ảnh gốc ${ex.trueLabel||'tải lên'}"><figcaption>${ex.originalSize.join('×')} gốc</figcaption></figure>${arrow}<figure><div class="gridimg sm"><img src="${q}" alt=""></div><figcaption>224×224 đã resize</figcaption></figure></div>`;
     return [v, v];}
   case 'tokens':{
-    const g=`<div class="gridimg"><img src="${q}" alt="Ảnh 224×224 với lưới 14×14 patch"></div>`;
+    const g=`<div class="gridimg patch-grid"><img src="${q}" alt="Ảnh query chia thành lưới 14×14 patch"></div>`;
     return [g, g];}
   case 'pool':{
-    const grid=ex.candidates.map((c,j)=>`<div class="cand"><img src="${img(c.img)}" alt="Candidate ${c.label}"><span class="r">#${j+1}</span><div class="lb">${sameMark(c)}${c.label}</div><div class="sv">cos ${fmt(c.score*.07,3)}</div></div>`).join('');
+    const grid=ex.candidates.map((c,j)=>`<div class="cand"><img src="${img(c.img)}" alt="Candidate ${c.label}"><span class="r">#${j+1}</span><div class="lb">${sameMark(c)}${c.label}</div><div class="sv">cos ${fmt(c.score,3)}</div></div>`).join('');
     return [skip,`<div class="cands">${grid}<div class="cand more" aria-label="còn ${int(ex.poolSize-ex.candidates.length)} ảnh khác trong pool"><span>…</span><small>+${int(ex.poolSize-ex.candidates.length)} ảnh</small></div></div><p class="cap">Tên loài${ex.trueLabel?' và chấm xanh (cùng loài với query)':''} lấy từ nhãn thật của dataset để người xem đối chiếu; mô hình không đọc nhãn.</p>`];}
   case 'selector':{
-    const rows=ex.candidates.map((c,j)=>`<div class="sc${j===0?' pick':''}"><span class="rk">#${j+1}</span><img src="${img(c.img)}" alt=""><span class="lb">${sameMark(c)}${c.label}</span><span class="track"><span class="bar" data-w="${c.p/ex.candidates[0].p*100}"></span></span><span class="val">${pct(c.p,1)}</span></div>`).join('');
-    return [skip,`<div class="scores" role="list" aria-label="Xác suất selector cho 8 candidate cao nhất">${rows}</div>
-      <div class="meta"><span>Mô hình chọn ảnh #1 làm context (xác suất ${pct(pick.p,1)}).</span></div>`];}
+    const rows=ex.candidates.map((c,j)=>`<div class="sc${j===0?' pick':''}"><span class="rk">#${j+1}</span><img src="${img(c.img)}" alt=""><span class="lb">${sameMark(c)}${c.label}</span><span class="cos">${fmt(c.score,3)}</span><span class="track"><span class="bar" data-w="${c.p/ex.candidates[0].p*100}"></span></span><span class="val">${pct(c.p,1)}</span></div>`).join('');
+    return [skip,`<div class="sc"><span></span><span></span><b>Candidate</b><b class="cos">Cosine</b><b>Xác suất</b><b></b></div><div class="scores" role="list" aria-label="Cosine similarity và xác suất của 8 candidate đứng đầu">${rows}</div>
+      <div class="meta"><span>Chọn candidate #1 làm context (cosine ${fmt(pick.score,3)}; xác suất ${pct(pick.p,1)}).</span></div>`];}
   case 'concat':
     return [`<div class="pair"><div class="gridimg sm"><img src="${q}" alt=""></div></div>${tokbar(false)}${tokkey(false)}<p class="cap"><span class="bign">${PREFIX+PATCH}<small>token</small></span></p>`,
             `<div class="pair"><div class="gridimg sm"><img src="${q}" alt="Query"></div><span class="plus">+</span><div class="gridimg sm"><img src="${ctx}" alt="Context đã chọn: ${ex.contextLabel}"></div></div>${tokbar(true)}${tokkey(true)}<p class="cap"><span class="bign">${PREFIX+2*PATCH}<small>token</small></span></p>`];
@@ -600,7 +601,7 @@ function cells(ex,k){
     const r=T.queryOnly.ce-T.ce;
     return ['<div class="skip">No-Context không chọn context.</div>',
       `<div class="eq"><span>${fmt(T.queryOnly.ce,3)}<small>CE chỉ query</small></span><span class="op">−</span><span>${fmt(T.ce,3)}<small>CE query + context</small></span><span class="op">=</span><span class="res ${r>0?'pos':'neg'}">${sgn(r,3)}<small>reward</small></span></div>
-       <p class="cap">${r>0?'Context giúp: selector được thưởng.':'Context làm hại: selector bị phạt.'}</p>`];}
+       <p class="cap">${r>0?'CE giảm nên reward dương.':'CE tăng nên reward âm.'}</p>`];}
   }
 }
 function makeTrace(root,ex){
